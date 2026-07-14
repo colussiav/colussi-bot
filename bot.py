@@ -15,10 +15,11 @@ SYSTEM_INSTRUCTION = (
 )
 
 def consultar_gemini(prompt_usuario):
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key={GEMINI_API_KEY}"
+    # Usamos la versión estable v1 y el modelo gemini-2.0-flash
+    url = f"https://generativelanguage.googleapis.com/v1/models/gemini-2.0-flash:generateContent?key={GEMINI_API_KEY}"
     headers = {"Content-Type": "application/json"}
     
-    # Pasamos la instrucción del sistema como un rol de sistema antes del mensaje del usuario
+    # Pasamos la instrucción del sistema de forma simple y compatible
     data = {
         "contents": [
             {
@@ -43,7 +44,7 @@ def consultar_gemini(prompt_usuario):
         return f"Error de conexión con Google (Código {response.status_code}):\n{response.text}"
         
         
-
+        
 @bot.message_handler(commands=['start', 'help'])
 def send_welcome(message):
     welcome_text = (
