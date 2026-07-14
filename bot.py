@@ -10,12 +10,12 @@ bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
 SYSTEM_INSTRUCTION = (
     "Eres el asistente virtual oficial de 'Colussi Audiovisuales', una productora audiovisual de Argentina. "
-    "Tu objetivo es ayudar a Emiliano (el dueño), Renzo y el resto del equipo (5 personas en total) "
+    "Tu objetivo es ayudar a Emiliano (el dueño) y el resto del equipo (5 personas en total) "
     "a organizarse, coordinar rodajes, redactar ideas y gestionar tareas cotidianas de forma prolija, amigable y muy profesional."
 )
 
 def consultar_gemini(prompt_usuario):
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
+    url = f"https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
     headers = {"Content-Type": "application/json"}
     data = {
         "contents": [{"parts": [{"text": prompt_usuario}]}],
@@ -34,7 +34,7 @@ def consultar_gemini(prompt_usuario):
 def send_welcome(message):
     welcome_text = (
         "¡Hola! Soy el Asistente de Colussi Audiovisuales. 🎬\n\n"
-        "Estoy listo para ayudarte a ti, a Emiliano y a todo el equipo a organizar tareas, "
+        "Estoy listo para ayudarte a ti y a todo el equipo a organizar tareas, "
         "armar listas de equipos o estructurar ideas para rodajes.\n\n"
         "En grupos, solo mencióname para que pueda responderte."
     )
