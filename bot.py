@@ -16,7 +16,7 @@ SYSTEM_INSTRUCTION = (
 
 def consultar_gemini(prompt_usuario):
     # Usamos la versión estable v1 y el modelo gemini-2.0-flash
-    url = f"https://generativelanguage.googleapis.com/v1/models/gemini-2.0-flash:generateContent?key={GEMINI_API_KEY}"
+    url = f"https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
     headers = {"Content-Type": "application/json"}
     
     # Pasamos la instrucción del sistema de forma simple y compatible
