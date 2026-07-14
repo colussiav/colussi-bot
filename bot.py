@@ -15,19 +15,33 @@ SYSTEM_INSTRUCTION = (
 )
 
 def consultar_gemini(prompt_usuario):
-    # Endpoint oficial para listar los modelos disponibles en tu cuenta
-    url = f"https://generativelanguage.googleapis.com/v1beta/models?key={GEMINI_API_KEY}"
+    # Usamos el alias estable que tenés disponible: gemini-flash-latest
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key={GEMINI_API_KEY}"
+    headers = {"Content-Type": "application/json"}
     
-    response = requests.get(url)
+    data = {
+        "contents": [
+            {
+                "role": "user",
+                "parts": [{"text": f"Instrucciones del sistema: {SYSTEM_INSTRUCTION}\n\nMensaje del usuario: {prompt_usuario}"}]
+            }
+        ],
+        "generationConfig": {
+            "temperature": 0.7
+        }
+    }
+    
+    response = requests.post(url, json=data, headers=headers)
     
     if response.status_code == 200:
-        modelos = response.json().get("models", [])
-        # Filtramos solo los nombres para que sea legible
-        nombres = [m["name"].replace("models/", "") for m in modelos if "generateContent" in m.get("supportedGenerationMethods", [])]
-        lista_modelos = "\n".join(nombres)
-        return f"¡Conexión exitosa! Los modelos disponibles en tu cuenta son:\n\n{lista_modelos}"
+        json_response = response.json()
+        try:
+            return json_response['candidates'][0]['content']['parts'][0]['text']
+        except (KeyError, IndexError):
+            return "Error al procesar la respuesta del modelo."
     else:
-        return f"Error al listar modelos (Código {response.status_code}):\n{response.text}"
+        return f"Error de conexión con Google (Código {response.status_code}):\n{response.text}"
+        
         
         
         
