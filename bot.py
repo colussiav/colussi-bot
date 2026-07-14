@@ -18,22 +18,19 @@ def consultar_gemini(prompt_usuario):
     url = f"https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
     headers = {"Content-Type": "application/json"}
     
+    # Pasamos la instrucción del sistema como un rol de sistema antes del mensaje del usuario
     data = {
         "contents": [
             {
                 "role": "user",
-                "parts": [{"text": prompt_usuario}]
+                "parts": [{"text": f"Instrucciones del sistema: {SYSTEM_INSTRUCTION}\n\nMensaje del usuario: {prompt_usuario}"}]
             }
         ],
-        "system_instruction": {
-            "parts": [{"text": SYSTEM_INSTRUCTION}]
-        },
         "generationConfig": {
             "temperature": 0.7
         }
     }
     
-    # En Render NO necesitamos proxies molestos
     response = requests.post(url, json=data, headers=headers)
     
     if response.status_code == 200:
@@ -44,6 +41,7 @@ def consultar_gemini(prompt_usuario):
             return "Error al procesar la respuesta del modelo."
     else:
         return f"Error de conexión con Google (Código {response.status_code}):\n{response.text}"
+        
         
 
 @bot.message_handler(commands=['start', 'help'])
