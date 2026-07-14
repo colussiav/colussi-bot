@@ -14,7 +14,8 @@ SYSTEM_INSTRUCTION = (
     "a organizarse, coordinar rodajes, redactar ideas y gestionar tareas cotidianas de forma prolija, amigable y muy profesional."
 )
 
-def consultar_gemini(prompt_usuario):
+
+ def consultar_gemini(prompt_usuario):
     # Usamos el alias estable que tenés disponible: gemini-flash-latest
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key={GEMINI_API_KEY}"
     headers = {"Content-Type": "application/json"}
@@ -40,8 +41,7 @@ def consultar_gemini(prompt_usuario):
         except (KeyError, IndexError):
             return "Error al procesar la respuesta del modelo."
     else:
-        return f"Error de conexión con Google (Código {response.status_code}):\n{response.text}"
-        
+        return f"Error de conexión con Google (Código {response.status_code}):\n{response.text}"       
         
         
         
