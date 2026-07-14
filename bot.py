@@ -19,7 +19,7 @@ def consultar_gemini(prompt_usuario):
     headers = {"Content-Type": "application/json"}
     data = {
         "contents": [{"parts": [{"text": prompt_usuario}]}],
-        "systemInstruction": {"parts": [{"text": SYSTEM_INSTRUCTION}]},
+        "system_instruction": {"parts": [{"text": SYSTEM_INSTRUCTION}]},
         "generationConfig": {"temperature": 0.7, "maxOutputTokens": 800}
     }
     # En Render NO necesitamos proxies molestos, va directo!
