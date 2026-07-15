@@ -82,7 +82,7 @@ def agendar_evento_google(titulo, inicio_iso, fin_iso, descripcion=""):
     except Exception as e:
         return f"Hubo un error al guardar en Google Calendar: {str(e)}"
 
-# --- FUNCIÓN NOTION PERFECTA ---
+# --- FUNCIÓN NOTION ULTRA SIMPLIFICADA ---
 def agregar_tarea_notion(nombre_tarea, persona):
     url = "https://api.notion.com/v1/pages"
     headers = {
@@ -97,22 +97,7 @@ def agregar_tarea_notion(nombre_tarea, persona):
                 "title": [
                     {
                         "text": {
-                            "content": nombre_tarea
-                        }
-                    }
-                ]
-            },
-            "Asignado": {
-                "select": {
-                    "name": persona
-                }
-            },
-            "Responsable": {
-                "people": [
-                    {
-                        "object": "user",
-                        "person": {
-                            "email": "colussi.av@gmail.com"
+                            "content": f"[{persona}] {nombre_tarea}"
                         }
                     }
                 ]
