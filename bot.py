@@ -1,13 +1,17 @@
 import os
 import requests
 import telebot
-from datetime import datetime
+import json
+import datetime
+from datetime import timedelta
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 
 # Credenciales de Render
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
+NOTION_API_KEY = os.environ.get("NOTION_API_KEY")
+NOTION_DATABASE_ID = os.environ.get("NOTION_DATABASE_ID")
 
 # CONFIGURACIÓN DE SEGURIDAD (Solo Emiliano tiene acceso al calendario)
 ADMIN_TELEGRAM_ID = 8802307065
@@ -23,12 +27,11 @@ except Exception as e:
 
 SYSTEM_INSTRUCTION = (
     "Eres el asistente virtual oficial de 'Colussi Audiovisuales', una productora audiovisual de Argentina. "
-    "Tu objetivo es ayudar a Emiliano (el dueño) y el resto del equipo (5 personas en total) "
+    "Tu objetivo es ayudar a Emiliano (el dueño) y el resto del equipo (5 personas en total: Emi, Delfi, Renzo, Santi, Ari) "
     "a organizarse, coordinar rodajes, redactar ideas y gestionar tareas cotidianas de forma prolija, amigable y muy profesional."
 )
 
 # --- NUEVAS CREDENCIALES ENMASCARADAS (Para evitar el bloqueo de Google) ---
-# Separamos la clave en porciones de texto para burlar los escáneres automáticos de GitHub
 PARTE_1 = "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC++gjfZqmWDWg2\n2dVt4s0oetyf7isRxrW/OyCjnsqkuPcBt/0iTM6nksoztfYobH49OkXMWz0d62S1"
 PARTE_2 = "\n/OPDzv3sRoGPWXeNBtC9RBl+Oo90WasAS6Xm9Ef6fOM+I4GAsJ2w3fN8LhhJbEtV\nDq4OLMVCGyIRDX7Nm3cQIzSrRZC293UzXRUGm1IFLnOG/l0ndH7E1UyDq1vckHsO\noO+fg5OdIksc+3HYNKPMv0QCOcpQhNioS8XEP+5YTJiBOrjhr8in622VaPswpdxa"
 PARTE_3 = "\nFCUAoz+0aEFfxuT3bzoyX3MYCVv/D0b7BkOBYWTcscybhKco+5A7urA56UUVmLru\nm8bD72jtAgMBAAECggEAFLXybOHKDeEN1nb4r6ZLN/LdBsYSKycY0jCEGWJw2PzL\nIsdUfxoDxkYDwihfVeJwLU0qwR766Yn73cWbYMKLpIo/5i8eaS+eRwxB1H/ey1An"
@@ -90,14 +93,33 @@ def agendar_evento_google(titulo, inicio_iso, fin_iso, descripcion=""):
     except Exception as e:
         return f"Hubo un error al intentar guardar en Google Calendar: {str(e)}"
 
+# --- FUNCIÓN NOTION ---
+def agregar_tarea_notion(nombre_tarea, persona):
+    url = "https://api.notion.com/v1/pages"
+    headers = {
+        "Authorization": f"Bearer {NOTION_API_KEY}",
+        "Content-Type": "application/json",
+        "Notion-Version": "2022-06-28"
+    }
+    data = {
+        "parent": {"database_id": NOTION_DATABASE_ID},
+        "properties": {
+            "Name": {"title": [{"text": {"content": nombre_tarea}}]},
+            "Asignado": {"select": {"name": persona}}
+        }
+    }
+    try:
+        response = requests.post(url, json=data, headers=headers)
+        return response.status_code == 200
+    except Exception as e:
+        print(f"Error Notion API: {e}")
+        return False
+
 # --- CONEXIÓN CON GEMINI ---
 def consultar_gemini(prompt_usuario):
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent?key={GEMINI_API_KEY}"
     headers = {"Content-Type": "application/json"}
     
-    # Calculamos la hora exacta en Argentina (GMT-3) para que interprete bien "mañana", "hoy", etc.
-    import datetime
-    from datetime import timedelta
     hora_arg = datetime.datetime.utcnow() - timedelta(hours=3)
     fecha_actual_str = hora_arg.strftime('%Y-%m-%d %H:%M')
     
@@ -108,10 +130,15 @@ def consultar_gemini(prompt_usuario):
                 "parts": [{"text": (
                     f"Instrucciones del sistema: {SYSTEM_INSTRUCTION}\n\n"
                     f"Hoy es {fecha_actual_str} (Huso horario de Argentina).\n"
-                    "Si el usuario te está pidiendo agendar un evento, responde EXCLUSIVAMENTE en este formato estructurado para que mi código lo procese:\n"
+                    "Tienes dos tareas especiales estructuradas si el usuario te lo pide:\n"
+                    "1. AGENDAR EN GOOGLE CALENDAR:\n"
+                    "Si el usuario te está pidiendo agendar un evento en su calendario, responde EXCLUSIVAMENTE con este formato:\n"
                     "AGENDAR|Titulo del evento|YYYY-MM-DDTHH:MM:SS|YYYY-MM-DDTHH:MM:SS|Breve descripcion\n"
-                    "Ejemplo: AGENDAR|Sesión de fotos|2026-07-14T16:00:00|2026-07-14T17:00:00|Coordinar con Emiliano.\n"
-                    "Si el usuario NO está pidiendo agendar algo, responde normalmente con tu personalidad amigable.\n\n"
+                    "2. REGISTRAR EN NOTION:\n"
+                    "Si el usuario te está pidiendo que anotes una tarea pendiente asignada a un miembro del equipo (Emi, Delfi, Renzo, Santi o Ari), responde EXCLUSIVAMENTE con este formato:\n"
+                    "NOTION|Titulo de la tarea|PersonaAsignada\n"
+                    "Ejemplo si dice 'Delfi tiene que mandar el presupuesto': NOTION|Enviar presupuesto a Garibaldi|Delfi\n"
+                    "Si el usuario NO está pidiendo agendar ni registrar tareas, responde normalmente con tu personalidad amigable.\n\n"
                     f"Mensaje del usuario: {prompt_usuario}"
                 )}]
             }
@@ -129,16 +156,13 @@ def consultar_gemini(prompt_usuario):
             return "Error al procesar la respuesta del modelo."
     else:
         return f"Error de conexión con Google (Código {response.status_code}):\n{response.text}"       
-        
 
 # --- MANEJADORES DE TELEGRAM ---
 @bot.message_handler(commands=['start', 'help'])
 def send_welcome(message):
     welcome_text = (
         "¡Hola! Soy el Asistente de Colussi Audiovisuales. 🎬\n\n"
-        "Estoy listo para ayudarte a ti y a todo el equipo a organizar tareas, "
-        "armar listas de equipos o estructurar ideas para rodajes.\n\n"
-        "Emiliano: ya tengo tu ID de administrador configurado de forma segura."
+        "Puedo agendar tus rodajes en Google Calendar y ahora también organizar las tareas del equipo directo en tu Notion."
     )
     bot.reply_to(message, welcome_text)
 
@@ -154,31 +178,44 @@ def handle_message(message):
             bot.reply_to(message, "¡Hola! ¿En qué puedo ayudarte hoy?")
             return
         
-        pide_agendar = any(palabra in clean_text.lower() for palabra in ["agenda", "reunion", "sesion", "rodaje", "grabar", "cita"])
-        if pide_agendar and usuario_id != ADMIN_TELEGRAM_ID:
-            bot.reply_to(message, "Lo siento, solo Emiliano tiene permisos para modificar o ver la agenda de la productora.")
+        # Validación de administrador solo para modificaciones
+        if usuario_id != ADMIN_TELEGRAM_ID:
+            bot.reply_to(message, "Lo siento, solo Emiliano tiene permisos de administración.")
             return
 
         try:
             respuesta_ai = consultar_gemini(clean_text)
             
+            # Caso 1: Calendario
             if respuesta_ai.startswith("AGENDAR|"):
                 partes = respuesta_ai.split("|")
                 if len(partes) >= 5:
-                    titulo = partes[1]
-                    inicio = partes[2]
-                    fin = partes[3]
-                    desc =  partes[4]
-                    
-                    resultado = agendar_evento_google(titulo, inicio, fin, desc)
+                    resultado = agendar_evento_google(partes[1], partes[2], partes[3], partes[4])
                     bot.reply_to(message, resultado)
                 else:
-                    bot.reply_to(message, "No pude interpretar correctamente los datos para agendar. ¿Me lo repites?")
+                    bot.reply_to(message, "No pude interpretar correctamente los datos para agendar.")
+            
+            # Caso 2: Notion
+            elif respuesta_ai.startswith("NOTION|"):
+                partes = respuesta_ai.split("|")
+                if len(partes) >= 3:
+                    tarea = partes[1]
+                    persona = partes[2].capitalize()
+                    
+                    if agregar_tarea_notion(tarea, persona):
+                        bot.reply_to(message, f"¡Excelente! Anoté en Notion: '{tarea}' asignada a {persona}. 📝")
+                    else:
+                        bot.reply_to(message, "No pude guardar la tarea en Notion. Verificá que el bot tenga acceso a la página.")
+                else:
+                    bot.reply_to(message, "Formato de tarea de Notion incorrecto.")
+            
+            # Caso 3: Charla normal
             else:
                 bot.reply_to(message, respuesta_ai)
                 
         except Exception as e:
             bot.reply_to(message, f"Error inesperado:\n{str(e)}")
 
-print("Bot Colussi Audiovisuales encendido de forma directa en Render...")
+print("Bot Colussi Audiovisuales encendido...")
 bot.infinity_polling()
+        
