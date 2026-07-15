@@ -31,58 +31,16 @@ SYSTEM_INSTRUCTION = (
     "a organizarse, coordinar rodajes, redactar ideas y gestionar tareas cotidianas de forma prolija, amigable y muy profesional."
 )
 
-# --- CREDENCIALES ENMASCARADAS PARA GOOGLE CALENDAR ---
-PARTE_1 = "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC++gjfZqmWDWg2\n2dVt4s0oetyf7isRxrW/OyCjnsqkuPcBt/0iTM6nksoztfYobH49OkXMWz0d62S1"
-PARTE_2 = "\n/OPDzv3sRoGPWXeNBtC9RBl+Oo90WasAS6Xm9Ef6fOM+I4GAsJ2w3fN8LhhJbEtV\nDq4OLMVCGyIRDX7Nm3cQIzSrRZC293UzXRUGm1IFLnOG/l0ndH7E1UyDq1vckHsO\noO+fg5OdIksc+3HYNKPMv0QCOcpQhNioS8XEP+5YTJiBOrjhr8in622VaPswpdxa"
-PARTE_3 = "\nFCUAoz+0aEFfxuT3bzoyX3MYCVv/D0b7BkOBYWTcscybhKco+5A7urA56UUVmLru\nm8bD72jtAgMBAAECggEAFLXybOHKDeEN1nb4r6ZLN/LdBsYSKycY0jCEGWJw2PzL\nIsdUfxoDxkYDwihfVeJwLU0qwR766Yn73cWbYMKLpIo/5i8eaS+eRwxB1H/ey1An"
-PARTE_4 = "\nHIzXpMyEmsxc64H3uyBMNaBYVbT9AsdpAwQoyZY+3SyqnN1RDVSpDJm4zkMozsKm\nfdA0G7HcCRzlWtSFqEsCgGHCErijAP/5PUndJQcIa+kGghxedWk8gbwz+CJ8jQhk\nzSs9BWEmFixOZ7ERuoaK/0y02gF1gFhWTt85MvjcEWGKEv4129hQmok0PoMhvMAc"
-PARTE_5 = "\n05qh5Q0DIRqkBe7NODYG1XpzlEueJe4iWDNBmZTHqQKBgQD7AGQWMhu5+ZAKT1Sv\ncRe2IYndjY6X3BaIai10rucDYMAD715y8kpTDNpL0hcqj/jQjCLLGsH6WCY1g+UL\nK5TkcIq17DfhFAH6uXoNaR3YlwkKpunaiGwedTfLL+h+SSP7YIiY/7ZorxcjCith"
-PARTE_6 = "\nVfU0kUasT4SohfP9Ez3thWMchQKBgQDCx6LnCvYNz/Rx49c5ykHZOEMfoQkeLAG9\n77OEM2mWrSm9QR9NjgL0rPVlYx0Ps0H9jdPN1yrt5IbcvFs4LRX7pMnzvi4VyZ7z\nPg0ghtU6zVCJky+MhCrZScXvCZ89ne99I/zuo9Fbf+0WqxmaSistbPCDy00Q2Tin"
-PARTE_7 = "\nsV05uDVbSQKBgQCWrjpndLdeYupMtikhlWPlq6anAWb71V0VkaAuLx1x0rAS7K0n\nljp2Nv4JjFrp6zo0gBwXD74peqedcsuadBRTOxiac+9ryGYTzSrvSA5pyunboi47\nSbCWbEoNSXpp7aCTNPVr2/72Qz5Bg8ZdDYxBfYEOykHaJWg+okGICI5iPQKBgGhV"
-PARTE_8 = "\niZQbEfwKFZVgByykg6s4cPQjTYAE8JXuLQm2hGu6q+39USg41qp7byN0+N8tFT8d\nVoQfKpatX/QjTPWFaQ4Xkjnm+Eahbmw7I8r1johl7CsVVVX+gflMhCLr04ms7Njq\nixTFWWKa3sPSuO8lpYU6oobmQoyw3qEs55QAcUxJAoGAQbdhqKfDCoCRp/GbDYUi\nqIsM+Kkps14LKqaxANboGvSrzP7nC1F6p4Y6Fh/vi35YDyv98w2INMURPiI1LyqH\nn4+OEixMpW0xbhkBmAoEvhO6d5hArq1FYrG0vohXSAJL4GUTWz+iHzmH3RnoFxAe\nC3vKqUOZQF3JMUnAaJ8qYs8=\n-----END PRIVATE KEY-----\n"
-
-CLAVE_ARMADA = PARTE_1 + PARTE_2 + PARTE_3 + PARTE_4 + PARTE_5 + PARTE_6 + PARTE_7 + PARTE_8
-
+# --- GOOGLE CALENDAR ---
 def obtener_servicio_calendar():
-    try:
-        creds_dict = {
-            "type": "service_account",
-            "project_id": "divine-fuze-489315-t7",
-            "private_key_id": "b90361e604072577d9001acac0465d8cc3f285c4",
-            "private_key": CLAVE_ARMADA,
-            "client_email": "colussi-asistente@divine-fuze-489315-t7.iam.gserviceaccount.com",
-            "client_id": "113531875855960411091",
-            "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-            "token_uri": "https://oauth2.googleapis.com/token",
-            "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
-            "client_x509_cert_url": "https://www.googleapis.com/robot/v1/metadata/x509/colussi-asistente%40divine-fuze-489315-t7.iam.gserviceaccount.com",
-            "universe_domain": "googleapis.com"
-        }
-        scopes = ['https://www.googleapis.com/auth/calendar']
-        creds = service_account.Credentials.from_service_account_info(creds_dict, scopes=scopes)
-        return build('calendar', 'v3', credentials=creds)
-    except Exception as e:
-        print(f"Error al validar credenciales: {e}")
-        return None
+    # Nota: Como Google te desactivó las credenciales anteriores por seguridad,
+    # luego configuraremos una nueva clave limpia desde Render. Por ahora evitamos que tire error al iniciar.
+    return None
 
 def agendar_evento_google(titulo, inicio_iso, fin_iso, descripcion=""):
-    service = obtener_servicio_calendar()
-    if not service:
-        return "Error: No se pudieron validar las credenciales de Google."
-    
-    event = {
-        'summary': titulo,
-        'description': descripcion,
-        'start': {'dateTime': inicio_iso, 'timeZone': 'America/Argentina/Cordoba'},
-        'end': {'dateTime': fin_iso, 'timeZone': 'America/Argentina/Cordoba'},
-    }
-    try:
-        service.events().insert(calendarId=CALENDAR_ID, body=event).execute()
-        return f"¡Listo, Emiliano! Agendé '{titulo}' en tu Google Calendar."
-    except Exception as e:
-        return f"Hubo un error al guardar en Google Calendar: {str(e)}"
+    return "La integración de Google Calendar requiere configurar una nueva clave privada segura en Render."
 
-# --- FUNCIÓN NOTION ULTRA SIMPLIFICADA ---
+# --- FUNCIÓN NOTION SIMPLIFICADA DE DIAGNÓSTICO ---
 def agregar_tarea_notion(nombre_tarea, persona):
     url = "https://api.notion.com/v1/pages"
     headers = {
@@ -106,11 +64,11 @@ def agregar_tarea_notion(nombre_tarea, persona):
     }
     try:
         response = requests.post(url, json=data, headers=headers)
-        if response.status_code != 200:
-            print(f"Error de Notion API: {response.status_code} - {response.text}")
+        print(f"DEBUG NOTION - Status Code: {response.status_code}")
+        print(f"DEBUG NOTION - Respuesta Completa: {response.text}")
         return response.status_code == 200
     except Exception as e:
-        print(f"Error de conexión con la API de Notion: {e}")
+        print(f"DEBUG NOTION - Error de conexión: {e}")
         return False
 
 # --- CONEXIÓN CON GEMINI ---
@@ -157,7 +115,7 @@ def consultar_gemini(prompt_usuario):
 # --- MANEJADORES DE TELEGRAM ---
 @bot.message_handler(commands=['start', 'help'])
 def send_welcome(message):
-    bot.reply_to(message, "¡Asistente listo y conectado con Calendar y Notion! 🎬📝")
+    bot.reply_to(message, "¡Asistente listo y conectado con Notion! 🎬📝")
 
 @bot.message_handler(func=lambda message: True)
 def handle_message(message):
@@ -210,4 +168,3 @@ def handle_message(message):
 
 print("Bot final encendido...")
 bot.infinity_polling()
-                
