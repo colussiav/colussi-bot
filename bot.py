@@ -1,4 +1,5 @@
 import os
+import json
 import requests
 import telebot
 from datetime import datetime
@@ -28,22 +29,38 @@ SYSTEM_INSTRUCTION = (
     "a organizarse, coordinar rodajes, redactar ideas y gestionar tareas cotidianas de forma prolija, amigable y muy profesional."
 )
 
+# --- CREDENCIALES INTEGRADAS DIRECTAMENTE (Para que Emiliano no tenga que abrir el JSON) ---
+# Usamos el archivo que me mandaste para que el bot se autentique solo
+CREDENCIALES_DICT = {
+  "type": "service_account",
+  "project_id": "divine-fuze-489315-t7",
+  "private_key_id": "0d01f307e24d73c4cbbb49b1306b7b9503e88039",
+  "private_key": "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQDIUvkHpjln9hnE\nzzD9U6MnCSe+pWfV++9XAnqlCq2xapaZB2edDbf6kYwBNO2zH+iLi5Bf3xHZKsT0\n236se7AimDhYcKTck1p22AgMv4AlkCgr8YSI+CU+mDdAsyVVtaKIaerigx3dirxi\nQ821+ifNv5qXA6GobNPRTAPGzxSV0IP15ScE6XVSmQmjyGGfCh8F+Xe1u1Zofbnx\nPYlP4rewPp9dMg5ntjKuuPsBbNM8HOa5iA7vwASlRVSvZA1ztSdR0DxcWLYiw1B9\n6PLGqCCsdiujWhxoRIKAXtKEaDrkB68mOHEtKAs/mVeSekhXe1diGp47JVLQNykS\n0DnwWIbFAgMBAAECggEAWEvOLTN0sSCV2hwy7S3sx1tvM8ZnPrfFllXm5hEPXxhq\nmbfcUSrHUX/OtId2UBI75yoUcFV74ftKhdyreG4qRA1RJJY97GVcpe5xmeDcpHHm\navwQ3Wh2ziC8ld2Aksc1BSieWcnOI6SvhSZ6qP/ChJs0EeUNX5XcRS/aqEoFOkS+\nTD8ONLR4CBqo+BO2/SU1zzHeUohewQM1oBiOf89oDIu8J/1lwPPfxbEAn+CmoXah\nLDYzYNC6XbEyn4csdpHofnk31vRHUpdy9ec8NAjObhJZKwf7GorQQqRAhttO2opk\nPgR820/IDXXSuS9Yvpv1r3J73hHiZkJfmNnQOwjKDwKBgQD26WkSCXTArE5s247h\nnKD51TTyqD4ygP+wuJlbjmZ/REfGhfsnTWjWBVc4/0fSYGBu3ncwZ4nmWfntcCZU\nxS39jCzWU5PsbtiwJFC1DNvqTfWad3gChbMeesiOa7Jm4Fcp2wcPVPfgZgFRKM91\noVDuMkvFTMTYp2filKda9QYRnwKBgQDPspQIXU/AmGOoFFUI1vYwUED0aZV28wAU\na6M9DaKYZEYRy+fd6fUWWixCCKfnSQX/S3eatqGLkQ7Km9uqNkE6/O/dKMzitFSk\nDSEYhiTUuuuBh9P0qu+N2QOaT+oxh8r1cTAW5MMyto20C/dCxDuTEhdfmOpul8az\nz7YIcfl1GwKBgCGG8jh7xjm/a+rGKXGjNgyWkdj9VWzALXgOqOxQusQ/PkvLt53P\nmhOtp/laWKNNaOrFFIQjGwuHXjOKjfnmyGbsWM5FjQmGx6+rTrY258m6CkaOQGJ/\nSyIxY/hK0W+8uLk7P4sqa3ox/63Ij9sWK4oclENXOEd++9E9hDgKm2dbAoGAMgqG\nnBVPV8nfiOmNK1oPasiLPdgKiOQ3SrQ8WkNkv265ayRDszXhNQd4zlgjjBgN99qI\n8J+8AFJsy+gNXs8/nCTA7fockyp7kiMPrEb1rMN0ZnsBWFuu5/A3bACBHnnnLoec\n3Ic1eIx/S7fuVQnOiLq9Iu1G3mp3F2+eHh7Hya0CgYEAwUTpmte2p29ZS8E4Ymxl\nkaPGaHxy/KC6xpxte0dtX085cVchk4FcQbQenybPtrq5cRZd4j02gr1D///AKSNm\n+KVTKmqzwIlnrHIKh75WUTCdAgwDJLEjCGlNHxkhkVbg4HGrCbrqH7/8otoaD34C\nFYZcYVcZqG7i+2Xi0UwAIoQ=\n-----END PRIVATE KEY-----\n",
+  "client_email": "colussi-asistente@divine-fuze-489315-t7.iam.gserviceaccount.com",
+  "client_id": "113531875855960411091",
+  "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+  "token_uri": "https://oauth2.googleapis.com/token",
+  "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+  "client_x509_cert_url": "https://www.googleapis.com/robot/v1/metadata/x509/colussi-asistente%40divine-fuze-489315-t7.iam.gserviceaccount.com",
+  "universe_domain": "googleapis.com"
+}[span_0](start_span)[span_0](end_span)
+
 # --- CONFIGURACIÓN DE GOOGLE CALENDAR ---
 def obtener_servicio_calendar():
-    ruta_credenciales = "credentials.json"
-    if not os.path.exists(ruta_credenciales):
+    try:
+        scopes = ['https://www.googleapis.com/auth/calendar']
+        creds = service_account.Credentials.from_service_account_info(
+            CREDENCIALES_DICT, scopes=scopes
+        )
+        return build('calendar', 'v3', credentials=creds)
+    except Exception as e:
+        print(f"Error al validar credenciales: {e}")
         return None
-    
-    scopes = ['https://www.googleapis.com/auth/calendar']
-    creds = service_account.Credentials.from_service_account_file(
-        ruta_credenciales, scopes=scopes
-    )
-    return build('calendar', 'v3', credentials=creds)
 
 def agendar_evento_google(titulo, inicio_iso, fin_iso, descripcion=""):
     service = obtener_servicio_calendar()
     if not service:
-        return "Error: No se encontró el archivo credentials.json en el servidor."
+        return "Error: No se pudieron validar las credenciales de Google de forma segura en el servidor."
     
     event = {
         'summary': titulo,
@@ -69,7 +86,6 @@ def consultar_gemini(prompt_usuario):
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent?key={GEMINI_API_KEY}"
     headers = {"Content-Type": "application/json"}
     
-    # Formateamos el prompt para que actúe de intermediario inteligente
     data = {
         "contents": [
             {
@@ -131,7 +147,6 @@ def handle_message(message):
         try:
             respuesta_ai = consultar_gemini(clean_text)
             
-            # Si Gemini detecta que hay que agendar, procesamos la estructura
             if respuesta_ai.startswith("AGENDAR|"):
                 partes = respuesta_ai.split("|")
                 if len(partes) >= 5:
@@ -145,7 +160,6 @@ def handle_message(message):
                 else:
                     bot.reply_to(message, "No pude interpretar correctamente los datos para agendar. ¿Me lo repites?")
             else:
-                # Respuesta normal de conversación
                 bot.reply_to(message, respuesta_ai)
                 
         except Exception as e:
