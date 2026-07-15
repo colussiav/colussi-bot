@@ -82,7 +82,7 @@ def agendar_evento_google(titulo, inicio_iso, fin_iso, descripcion=""):
     except Exception as e:
         return f"Hubo un error al guardar en Google Calendar: {str(e)}"
 
-# --- FUNCIÓN NOTION CORREGIDA ---
+# --- FUNCIÓN NOTION CORREGIDA CON RESPONSABLE REAL ---
 def agregar_tarea_notion(nombre_tarea, persona):
     url = "https://api.notion.com/v1/pages"
     headers = {
@@ -90,7 +90,6 @@ def agregar_tarea_notion(nombre_tarea, persona):
         "Content-Type": "application/json",
         "Notion-Version": "2022-06-28"
     }
-    # Corregimos la propiedad de título para que coincida con tu columna "Nombre de la tarea"
     data = {
         "parent": {"database_id": NOTION_DATABASE_ID},
         "properties": {
@@ -107,6 +106,16 @@ def agregar_tarea_notion(nombre_tarea, persona):
                 "select": {
                     "name": persona
                 }
+            },
+            "Responsable": {
+                "people": [
+                    {
+                        "object": "user",
+                        "person": {
+                            "email": "colussi.av@gmail.com"
+                        }
+                    }
+                ]
             }
         }
     }
@@ -118,6 +127,7 @@ def agregar_tarea_notion(nombre_tarea, persona):
     except Exception as e:
         print(f"Error de conexión con la API de Notion: {e}")
         return False
+
 
 # --- CONEXIÓN CON GEMINI ---
 def consultar_gemini(prompt_usuario):
