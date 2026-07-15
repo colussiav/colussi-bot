@@ -82,7 +82,7 @@ def agendar_evento_google(titulo, inicio_iso, fin_iso, descripcion=""):
     except Exception as e:
         return f"Hubo un error al guardar en Google Calendar: {str(e)}"
 
-# --- FUNCIÓN NOTION CORREGIDA CON RESPONSABLE REAL ---
+# --- FUNCIÓN NOTION PERFECTA ---
 def agregar_tarea_notion(nombre_tarea, persona):
     url = "https://api.notion.com/v1/pages"
     headers = {
@@ -127,7 +127,6 @@ def agregar_tarea_notion(nombre_tarea, persona):
     except Exception as e:
         print(f"Error de conexión con la API de Notion: {e}")
         return False
-
 
 # --- CONEXIÓN CON GEMINI ---
 def consultar_gemini(prompt_usuario):
@@ -226,4 +225,4 @@ def handle_message(message):
 
 print("Bot final encendido...")
 bot.infinity_polling()
-            
+                
