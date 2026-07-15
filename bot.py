@@ -95,13 +95,19 @@ def consultar_gemini(prompt_usuario):
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent?key={GEMINI_API_KEY}"
     headers = {"Content-Type": "application/json"}
     
+    # Calculamos la hora exacta en Argentina (GMT-3) para que interprete bien "mañana", "hoy", etc.
+    import datetime
+    from datetime import timedelta
+    hora_arg = datetime.datetime.utcnow() - timedelta(hours=3)
+    fecha_actual_str = hora_arg.strftime('%Y-%m-%d %H:%M')
+    
     data = {
         "contents": [
             {
                 "role": "user",
                 "parts": [{"text": (
                     f"Instrucciones del sistema: {SYSTEM_INSTRUCTION}\n\n"
-                    f"Hoy es {datetime.now().strftime('%Y-%m-%d %H:%M')}.\n"
+                    f"Hoy es {fecha_actual_str} (Huso horario de Argentina).\n"
                     "Si el usuario te está pidiendo agendar un evento, responde EXCLUSIVAMENTE en este formato estructurado para que mi código lo procese:\n"
                     "AGENDAR|Titulo del evento|YYYY-MM-DDTHH:MM:SS|YYYY-MM-DDTHH:MM:SS|Breve descripcion\n"
                     "Ejemplo: AGENDAR|Sesión de fotos|2026-07-14T16:00:00|2026-07-14T17:00:00|Coordinar con Emiliano.\n"
@@ -123,6 +129,7 @@ def consultar_gemini(prompt_usuario):
             return "Error al procesar la respuesta del modelo."
     else:
         return f"Error de conexión con Google (Código {response.status_code}):\n{response.text}"       
+        
 
 # --- MANEJADORES DE TELEGRAM ---
 @bot.message_handler(commands=['start', 'help'])
