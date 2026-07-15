@@ -55,10 +55,15 @@ def agregar_tarea_notion(nombre_tarea, persona):
                 "title": [
                     {
                         "text": {
-                            "content": f"[{persona}] {nombre_tarea}"
+                            "content": nombre_tarea
                         }
                     }
                 ]
+            },
+            "Asignado": {
+                "select": {
+                    "name": persona
+                }
             }
         }
     }
