@@ -472,4 +472,212 @@ def procesar_cambio_estado(texto, persona_remitente, message):
         for cand in candidatas:
             # Recortamos texto para evitar errores de longitud en Telegram
             callback_data = json.dumps({"id": cand["id"][:15], "est": nuevo_estado[:3], "p": persona_remitente[:3]})
-            markup.add(telebot.types.InlineKeyboardButt
+            markup.add(telebot.types.InlineKeyboardButton(cand["titulo"], callback_data=callback_data))
+        bot.reply_to(message, "Tengo varias tareas que coinciden. Seleccioná cuál querés actualizar:", reply_markup=markup)
+        return True
+        
+    # Si hay solo una, la cambiamos directo
+    id_tarea = candidatas[0]["id"]
+    titulo_tarea = candidatas[0]["titulo"]
+    
+    if aplicar_estado_por_id(id_tarea, nuevo_estado):
+        emoji = "🚀" if nuevo_estado == "En progreso" else "🎉"
+        bot.reply_to(message, f"{emoji} ¡Bárbaro {persona_remitente}! Pasé la tarea *'{titulo_tarea}'* a *{nuevo_estado}*.", parse_mode="Markdown")
+        # Feedback solo a Emiliano
+        notificar_cambio_a_emiliano(persona_remitente, titulo_tarea, nuevo_estado)
+    else:
+        bot.reply_to(message, "No pude actualizar Notion en este momento.")
+    return True
+
+# --- PROCESAR MENSAJES DE VOZ ---
+@bot.message_handler(content_types=['voice'])
+def handle_voice_message(message):
+    usuario_id = message.from_user.id
+    is_private = message.chat.type == "private"
+    
+    # Filtro estricto: Solo integrantes registrados pueden hablarle al bot
+    persona_remitente = None
+    for key, val in TELEGRAM_IDS.items():
+        if val and int(val) == usuario_id:
+            persona_remitente = key
+            break
+            
+    if not persona_remitente:
+        return  # Ignorar por completo a extraños
+
+    if is_private or (BOT_USERNAME in message.text if message.text else False):
+        try:
+            status_msg = bot.reply_to(message, "🎤 *Escuchando nota de voz...* ⏳", parse_mode="Markdown")
+            
+            # Descargar el audio
+            file_info = bot.get_file(message.voice.file_id)
+            downloaded_file = bot.download_file(file_info.file_path)
+            
+            # Gemini procesa el audio
+            respuesta_ai = consultar_gemini_con_audio(downloaded_file)
+            bot.delete_message(message.chat.id, status_msg.message_id)
+            
+            # Intentar ver si el audio era una solicitud de cambio de estado (empecé/listo)
+            texto_limpio = respuesta_ai.lower().strip()
+            if procesar_cambio_estado(texto_limpio, persona_remitente, message):
+                return
+                
+            # Restricción de roles para creación de tareas por audio
+            if respuesta_ai.startswith("NOTION|") or respuesta_ai.startswith("AGENDAR|"):
+                if persona_remitente not in ["Emi", "Delfi"]:
+                    bot.reply_to(message, "Lo siento, no tenés permisos para asignar tareas globales.")
+                    return
+            
+            # Procesar acción de creación
+            if respuesta_ai.startswith("NOTION|"):
+                partes = respuesta_ai.split("|")
+                if len(partes) >= 5:
+                    tarea, persona, plazo_raw, prioridad = partes[1], partes[2], partes[3], partes[4]
+                    plazo = None if plazo_raw == "None" else plazo_raw
+                    
+                    if agregar_tarea_notion_completa(tarea, persona, plazo, prioridad):
+                        notificado = enviar_alerta_telegram(persona, tarea, plazo, prioridad)
+                        aviso = f"¡Excelente! Anoté en Notion: '{tarea}' asignada a {persona}."
+                        if notificado:
+                            aviso += f"\n💬 Notificación privada enviada."
+                        bot.reply_to(message, aviso)
+            else:
+                bot.reply_to(message, respuesta_ai)
+                
+        except Exception as e:
+            bot.reply_to(message, f"Error de audio: {str(e)}")
+
+# --- MANEJADOR DE MENSAJES DE TEXTO ---
+@bot.message_handler(func=lambda message: True)
+def handle_message(message):
+    usuario_id = message.from_user.id
+    is_private = message.chat.type == "private"
+    is_mentioned = BOT_USERNAME in message.text if (message.text and BOT_USERNAME) else False
+
+    # Filtro estricto: Solo integrantes registrados
+    persona_remitente = None
+    for key, val in TELEGRAM_IDS.items():
+        if val and int(val) == usuario_id:
+            persona_remitente = key
+            break
+            
+    if not persona_remitente:
+        return  # Ignorar extraños
+
+    if is_private or is_mentioned:
+        texto = message.text.lower().strip()
+        
+        # 1. ACCESO GLOBAL A CONSULTAS (REGLA 1: Solo Emi y Delfi ven todo)
+        if any(x in texto for x in ["reporte general", "como venimos", "tareas generales", "todas las tareas"]):
+            if persona_remitente not in ["Emi", "Delfi"]:
+                bot.reply_to(message, "Lo siento, solo Emiliano y Delfi pueden solicitar el reporte general de la productora.")
+                return
+                
+            pendientes = obtener_pendientes_notion()
+            if not pendientes:
+                bot.reply_to(message, "🙌 ¡Excelente! No hay tareas pendientes en toda la productora.")
+                return
+                
+            mensaje = "📋 *Estado General de Tareas - Colussi AV:*\n\n"
+            for pers, bloques in pendientes.items():
+                mensaje += f"👤 *{pers}:*\n"
+                if bloques["en_progreso"]:
+                    mensaje += "  ⏳ *En progreso:*\n" + "\n".join([f"    🔹 {t}" for t in bloques["en_progreso"]]) + "\n"
+                if bloques["sin_empezar"]:
+                    mensaje += "  💤 *Sin empezar:*\n" + "\n".join([f"    🔹 {t}" for t in bloques["sin_empezar"]]) + "\n"
+                mensaje += "\n"
+            bot.reply_to(message, mensaje, parse_mode="Markdown")
+            return
+
+        # 2. CONSULTAS INDIVIDUALES (Cualquiera del equipo consulta lo suyo)
+        if any(x in texto for x in ["mis tareas", "tengo tareas", "tengo alguna tarea", "que tengo que hacer", "que tareas tengo"]):
+            pendientes = obtener_pendientes_notion()
+            bloques = pendientes.get(persona_remitente)
+            
+            if not bloques or (not bloques["sin_empezar"] and not bloques["en_progreso"]):
+                bot.reply_to(message, f"🙌 ¡Al día, {persona_remitente}! No tenés ninguna tarea pendiente asignada. ¡Excelente!")
+                return
+                
+            mensaje = f"📝 *Tus tareas pendientes actuales, {persona_remitente}:*\n\n"
+            if bloques["en_progreso"]:
+                mensaje += "⏳ *EN PROGRESO:*\n" + "\n".join([f"  🔹 {t}" for t in bloques["en_progreso"]]) + "\n\n"
+            if bloques["sin_empezar"]:
+                mensaje += "💤 *SIN EMPEZAR:*\n" + "\n".join([f"  🔹 {t}" for t in bloques["sin_empezar"]]) + "\n\n"
+                
+            bot.reply_to(message, mensaje, parse_mode="Markdown")
+            return
+
+        # 3. PROCESAR ACCIONES DE "EMPECÉ" O "LISTO" (TEXTO)
+        if procesar_cambio_estado(texto, persona_remitente, message):
+            return
+
+        # 4. RESTRICCIÓN DE ASIGNACIÓN (Solo Emi y Delfi pueden crear tareas usando Gemini)
+        clean_text = message.text.replace(f"@{BOT_USERNAME}", "").strip() if BOT_USERNAME else message.text.strip()
+        if not clean_text:
+            return
+
+        if persona_remitente not in ["Emi", "Delfi"]:
+            bot.reply_to(message, "Solo Emiliano y Delfi tienen permisos de administración.")
+            return
+
+        # Consultar Gemini para agendar o registrar tarea
+        try:
+            respuesta_ai = consultar_gemini(clean_text)
+            
+            if respuesta_ai.startswith("AGENDAR|"):
+                partes = respuesta_ai.split("|")
+                if len(partes) >= 5:
+                    resultado = agendar_evento_google(partes[1], partes[2], partes[3], partes[4])
+                    bot.reply_to(message, resultado)
+                    
+            elif respuesta_ai.startswith("NOTION|"):
+                partes = respuesta_ai.split("|")
+                if len(partes) >= 5:
+                    tarea, persona, plazo_raw, prioridad = partes[1], partes[2], partes[3], partes[4]
+                    plazo = None if plazo_raw == "None" else plazo_raw
+                    
+                    if agregar_tarea_notion_completa(tarea, persona, plazo, prioridad):
+                        notificado = enviar_alerta_telegram(persona, tarea, plazo, prioridad)
+                        
+                        # Alerta visual en el aviso si es presupuesto
+                        es_presu = "presupuesto" in tarea.lower()
+                        prioridad_aviso = "Alto (Urgente ⚠️)" if es_presu else prioridad
+                        
+                        aviso = f"¡Excelente! Anoté en Notion: '{tarea}' asignada a {persona} con prioridad *{prioridad_aviso}*. 📝"
+                        if notificado:
+                            aviso += f"\n💬 Ya le envié la notificación privada."
+                        bot.reply_to(message, aviso)
+            else:
+                bot.reply_to(message, respuesta_ai)
+        except Exception as e:
+            bot.reply_to(message, f"Error: {str(e)}")
+
+# --- SERVIDOR HTTP ---
+class WebhookHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        if self.path == "/" or self.path == "":
+            self.send_response(200)
+            self.send_header("Content-type", "text/plain")
+            self.end_headers()
+            self.wfile.write(b"Bot activo y despierto")
+            
+        elif self.path == "/recordatorio":
+            self.send_response(200)
+            self.send_header("Content-type", "text/plain")
+            self.end_headers()
+            resultado = enviar_reporte_matutino()
+            self.wfile.write(resultado.encode("utf-8"))
+        else:
+            self.send_response(404)
+            self.end_headers()
+
+def run_server():
+    port = int(os.environ.get("PORT", 10000))
+    server = HTTPServer(("0.0.0.0", port), WebhookHandler)
+    server.serve_forever()
+
+server_thread = threading.Thread(target=run_server, daemon=True)
+server_thread.start()
+
+print("Bot final encendido...")
+bot.infinity_polling()
