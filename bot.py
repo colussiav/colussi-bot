@@ -13,6 +13,15 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 NOTION_API_KEY = os.environ.get("NOTION_API_KEY")
 NOTION_DATABASE_ID = os.environ.get("NOTION_DATABASE_ID")
 
+# --- MAPEO DE USUARIOS DESDE VARIABLES DE ENTORNO EN RENDER ---
+TELEGRAM_IDS = {
+    "Delfi": os.environ.get("TELEGRAM_ID_DELFI"),
+    "Renzo": os.environ.get("TELEGRAM_ID_RENZO"),
+    "Ari": os.environ.get("TELEGRAM_ID_ARI"),
+    "Santi": os.environ.get("TELEGRAM_ID_SANTI"),
+    "Emi": os.environ.get("TELEGRAM_ID_EMI")
+}
+
 # CONFIGURACIÓN DE SEGURIDAD (Solo Emiliano tiene acceso)
 ADMIN_TELEGRAM_ID = 8802307065
 CALENDAR_ID = "colussi.av@gmail.com"
@@ -33,8 +42,6 @@ SYSTEM_INSTRUCTION = (
 
 # --- GOOGLE CALENDAR ---
 def obtener_servicio_calendar():
-    # Nota: Como Google te desactivó las credenciales anteriores por seguridad,
-    # luego configuraremos una nueva clave limpia desde Render. Por ahora evitamos que tire error al iniciar.
     return None
 
 def agendar_evento_google(titulo, inicio_iso, fin_iso, descripcion=""):
@@ -74,6 +81,32 @@ def agregar_tarea_notion(nombre_tarea, persona):
         return response.status_code == 200
     except Exception as e:
         print(f"DEBUG NOTION - Error de conexión: {e}")
+        return False
+
+# --- FUNCIÓN DE NOTIFICACIÓN EN SEGUNDO PLANO ---
+def enviar_alerta_telegram(persona, nombre_tarea):
+    telegram_id = TELEGRAM_IDS.get(persona)
+    if not telegram_id:
+        print(f"DEBUG NOTIFICACION - No hay variable guardada para {persona}")
+        return False
+        
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    mensaje = (
+        f"🔔 *¡Hola {persona}!* 🎬\n\n"
+        f"Te acaban de asignar una nueva tarea en Notion:\n"
+        f"📌 *{nombre_tarea}*"
+    )
+    data = {
+        "chat_id": telegram_id,
+        "text": mensaje,
+        "parse_mode": "Markdown"
+    }
+    try:
+        res = requests.post(url, json=data)
+        print(f"DEBUG NOTIFICACION - Status: {res.status_code} para {persona}")
+        return res.status_code == 200
+    except Exception as e:
+        print(f"DEBUG NOTIFICACION - Error: {e}")
         return False
 
 # --- CONEXIÓN CON GEMINI ---
@@ -158,7 +191,16 @@ def handle_message(message):
                     persona = partes[2]
                     
                     if agregar_tarea_notion(tarea, persona):
-                        bot.reply_to(message, f"¡Excelente! Anoté en Notion: '{tarea}' asignada a {persona}. 📝")
+                        # Acá enviamos la notificación si se guardó en Notion
+                        notificado = enviar_alerta_telegram(persona, tarea)
+                        
+                        aviso = f"¡Excelente! Anoté en Notion: '{tarea}' asignada a {persona}. 📝"
+                        if notificado:
+                            aviso += f"\n💬 Ya le envié la notificación privada a su Telegram."
+                        else:
+                            aviso += f"\n⚠️ No se pudo enviar mensaje por Telegram (¿Esa persona tiene el ID cargado en Render y ya inició chat con el bot?)."
+                        
+                        bot.reply_to(message, aviso)
                     else:
                         bot.reply_to(message, "No pude guardar la tarea en Notion. Verificá los permisos del bot.")
                 else:
