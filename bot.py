@@ -6,6 +6,8 @@ import datetime
 from datetime import timedelta
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
+from http.server import BaseHTTPRequestHandler, HTTPServer
+import threading
 
 # Credenciales de Render
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
@@ -47,33 +49,42 @@ def obtener_servicio_calendar():
 def agendar_evento_google(titulo, inicio_iso, fin_iso, descripcion=""):
     return "La integración de Google Calendar requiere configurar una nueva clave privada segura en Render."
 
-# --- FUNCIÓN NOTION SIMPLIFICADA DE DIAGNÓSTICO ---
-def agregar_tarea_notion(nombre_tarea, persona):
+# --- FUNCIÓN NOTION MEJORADA CON PLAZO Y PRIORIDAD ---
+def agregar_tarea_notion_completa(nombre_tarea, persona, fecha_plazo=None, prioridad="Medio"):
     url = "https://api.notion.com/v1/pages"
     headers = {
         "Authorization": f"Bearer {NOTION_API_KEY}",
         "Content-Type": "application/json",
         "Notion-Version": "2022-06-28"
     }
-    data = {
-        "parent": {"database_id": NOTION_DATABASE_ID},
-        "properties": {
-            "Nombre de la tarea": {
-                "title": [
-                    {
-                        "text": {
-                            "content": nombre_tarea
-                        }
-                    }
-                ]
-            },
-            "Asignado": {
-                "select": {
-                    "name": persona
-                }
-            }
+    
+    # Propiedades base obligatorias (Nombre de la tarea, Asignado y Estado inicial)
+    properties = {
+        "Nombre de la tarea": {
+            "title": [{"text": {"content": nombre_tarea}}]
+        },
+        "Asignado": {
+            "select": {"name": persona}
+        },
+        "Estado": {
+            "status": {"name": "Sin empezar"}
+        },
+        "Prioridad": {
+            "select": {"name": prioridad}
         }
     }
+    
+    # Si Gemini detectó una fecha límite, la agregamos a la columna "Plazo"
+    if fecha_plazo:
+        properties["Plazo"] = {
+            "date": {"start": fecha_plazo}
+        }
+        
+    data = {
+        "parent": {"database_id": NOTION_DATABASE_ID},
+        "properties": properties
+    }
+    
     try:
         response = requests.post(url, json=data, headers=headers)
         print(f"DEBUG NOTION - Status Code: {response.status_code}")
@@ -83,19 +94,82 @@ def agregar_tarea_notion(nombre_tarea, persona):
         print(f"DEBUG NOTION - Error de conexión: {e}")
         return False
 
+# --- FUNCIÓN NOTION: CONSEGUIR TAREAS PENDIENTES ---
+def obtener_pendientes_notion():
+    url = f"https://api.notion.com/v1/databases/{NOTION_DATABASE_ID}/query"
+    headers = {
+        "Authorization": f"Bearer {NOTION_API_KEY}",
+        "Content-Type": "application/json",
+        "Notion-Version": "2022-06-28"
+    }
+    
+    try:
+        response = requests.post(url, headers=headers)
+        if response.status_code != 200:
+            print(f"Error consultando Notion para reportes: {response.status_code}")
+            return {}
+            
+        resultados = response.json().get("results", [])
+        pendientes_por_persona = {}
+        
+        for pagina in resultados:
+            propiedades = pagina.get("properties", {})
+            
+            # 1. Obtener Estado
+            estado_data = propiedades.get("Estado", {}).get("status")
+            estado = estado_data.get("name", "Sin empezar") if estado_data else "Sin empezar"
+            
+            # Filtramos las completadas (para que no aparezcan en el reporte diario)
+            if estado.lower() in ["completada", "completado", "hecho", "lista", "listo"]:
+                continue
+                
+            # 2. Obtener Nombre de la tarea
+            titulo_data = propiedades.get("Nombre de la tarea", {}).get("title", [])
+            nombre_tarea = titulo_data[0].get("text", {}).get("content", "Tarea sin nombre") if titulo_data else "Tarea sin nombre"
+            
+            # 3. Obtener Persona Asignada
+            asignado_data = propiedades.get("Asignado", {}).get("select")
+            persona = asignado_data.get("name") if asignado_data else None
+            
+            if persona:
+                if persona not in pendientes_por_persona:
+                    pendientes_por_persona[persona] = []
+                pendientes_por_persona[persona].append(nombre_tarea)
+                
+        return pendientes_por_persona
+    except Exception as e:
+        print(f"Error en obtener_pendientes_notion: {e}")
+        return {}
+
 # --- FUNCIÓN DE NOTIFICACIÓN EN SEGUNDO PLANO ---
-def enviar_alerta_telegram(persona, nombre_tarea):
+def enviar_alerta_telegram(persona, nombre_tarea, fecha_plazo=None, prioridad="Medio"):
     telegram_id = TELEGRAM_IDS.get(persona)
     if not telegram_id:
         print(f"DEBUG NOTIFICACION - No hay variable guardada para {persona}")
         return False
         
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    
+    # Darle un toque visual si la tarea es urgente
+    alerta_prioridad = "⚠️" if prioridad == "Alto" else "📌"
+    
     mensaje = (
         f"🔔 *¡Hola {persona}!* 🎬\n\n"
         f"Te acaban de asignar una nueva tarea en Notion:\n"
-        f"📌 *{nombre_tarea}*"
+        f"{alerta_prioridad} *{nombre_tarea}*\n"
+        f"▪️ *Prioridad:* {prioridad}\n"
     )
+    
+    # Si tiene plazo, se lo sumamos al mensaje de Telegram
+    if fecha_plazo:
+        # Formateamos la fecha de YYYY-MM-DD a DD/MM/YYYY para que sea más amigable
+        try:
+            partes_fecha = fecha_plazo.split("-")
+            fecha_bonita = f"{partes_fecha[2]}/{partes_fecha[1]}/{partes_fecha[0]}"
+            mensaje += f"📅 *Plazo de entrega:* {fecha_bonita}\n"
+        except:
+            mensaje += f"📅 *Plazo de entrega:* {fecha_plazo}\n"
+            
     data = {
         "chat_id": telegram_id,
         "text": mensaje,
@@ -103,13 +177,48 @@ def enviar_alerta_telegram(persona, nombre_tarea):
     }
     try:
         res = requests.post(url, json=data)
-        print(f"DEBUG NOTIFICACION - Status: {res.status_code} para {persona}")
         return res.status_code == 200
     except Exception as e:
         print(f"DEBUG NOTIFICACION - Error: {e}")
         return False
 
-# --- CONEXIÓN CON GEMINI ---
+# --- FUNCIÓN PARA ENVIAR EL REPORTE MATUTINO COMPLETO ---
+def enviar_reporte_matutino():
+    print("Iniciando generación de reporte matutino...")
+    pendientes = obtener_pendientes_notion()
+    
+    if not pendientes:
+        print("No se encontraron tareas pendientes para reportar.")
+        return "No hay tareas pendientes en la base de datos."
+        
+    enviados = 0
+    for persona, tareas in pendientes.items():
+        telegram_id = TELEGRAM_IDS.get(persona)
+        if telegram_id:
+            lista_tareas = "\n".join([f"🔹 {t}" for t in tareas])
+            mensaje = (
+                f"☕ *¡Buen día, {persona}!* 🎬\n\n"
+                f"Acá tenés tus tareas pendientes de hoy en *Colussi AV*:\n\n"
+                f"{lista_tareas}\n\n"
+                f"¡Que tengas una excelente jornada de producción! 🚀"
+            )
+            
+            url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+            data = {
+                "chat_id": telegram_id,
+                "text": mensaje,
+                "parse_mode": "Markdown"
+            }
+            try:
+                res = requests.post(url, json=data)
+                if res.status_code == 200:
+                    enviados += 1
+            except Exception as e:
+                print(f"Error enviando reporte a {persona}: {e}")
+                
+    return f"Reportes enviados con éxito a {enviados} integrantes."
+
+# --- CONEXIÓN CON GEMINI MEJORADA ---
 def consultar_gemini(prompt_usuario):
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent?key={GEMINI_API_KEY}"
     headers = {"Content-Type": "application/json"}
@@ -129,10 +238,15 @@ def consultar_gemini(prompt_usuario):
                     "Si te pide agendar, responde EXCLUSIVAMENTE con este formato:\n"
                     "AGENDAR|Titulo del evento|YYYY-MM-DDTHH:MM:SS|YYYY-MM-DDTHH:MM:SS|Breve descripcion\n\n"
                     "2. REGISTRAR EN NOTION:\n"
-                    "Si te pide anotar una tarea para un miembro del equipo (Emi, Delfi, Renzo, Santi o Ari), responde EXCLUSIVAMENTE con este formato:\n"
-                    "NOTION|Titulo de la tarea|PersonaAsignada\n"
-                    "Ejemplo: NOTION|Enviar presupuesto a Garibaldi|Delfi\n"
-                    "Nota: 'PersonaAsignada' debe ser estrictamente uno de estos nombres (con la primera letra en mayúscula): Emi, Delfi, Renzo, Santi o Ari.\n\n"
+                    "Si te pide anotar una tarea para un miembro del equipo (Emi, Delfi, Renzo, Santi o Ari), analiza muy bien el texto buscando plazos (fechas, días de la semana, 'hoy', 'mañana') e importancia (si es urgente o no).\n"
+                    "Responde EXCLUSIVAMENTE con este formato:\n"
+                    "NOTION|Titulo de la tarea|PersonaAsignada|YYYY-MM-DD|Prioridad\n\n"
+                    "Reglas para NOTION:\n"
+                    "- 'PersonaAsignada' debe ser estrictamente: Emi, Delfi, Renzo, Santi o Ari.\n"
+                    "- 'YYYY-MM-DD' es la fecha límite. Si el usuario no menciona una fecha o plazo, escribe 'None'. Si menciona un día de la semana (ej. 'el sábado'), calcula a qué fecha corresponde según el día de hoy.\n"
+                    "- 'Prioridad' debe ser estrictamente uno de estos tres valores: Alto, Medio o Bajo (Si dice 'urgente' o similar usa Alto. Si no se infiere importancia, usa Medio).\n\n"
+                    "Ejemplo 1: NOTION|Enviar presupuesto a Garibaldi|Delfi|2026-07-18|Alto\n"
+                    "Ejemplo 2: NOTION|Editar video de Rosaura|Renzo|None|Medio\n\n"
                     "Si no pide agendar ni registrar tareas, responde como tu amigable asistente virtual normalmente.\n\n"
                     f"Mensaje del usuario: {prompt_usuario}"
                 )}]
@@ -183,26 +297,34 @@ def handle_message(message):
                 else:
                     bot.reply_to(message, "No pude procesar los datos para el calendario.")
             
-            # Caso Notion
+            # Caso Notion Mejorado
             elif respuesta_ai.startswith("NOTION|"):
                 partes = respuesta_ai.split("|")
-                if len(partes) >= 3:
+                if len(partes) >= 5:
                     tarea = partes[1]
                     persona = partes[2]
+                    plazo_raw = partes[3]
+                    prioridad = partes[4]
                     
-                    if agregar_tarea_notion(tarea, persona):
-                        # Acá enviamos la notificación si se guardó en Notion
-                        notificado = enviar_alerta_telegram(persona, tarea)
+                    # Limpiamos si no hay plazo asignado
+                    plazo = None if plazo_raw == "None" else plazo_raw
+                    
+                    if agregar_tarea_notion_completa(tarea, persona, plazo, prioridad):
+                        # Enviamos alerta detallando plazo y prioridad si corresponde
+                        notificado = enviar_alerta_telegram(persona, tarea, plazo, prioridad)
                         
-                        aviso = f"¡Excelente! Anoté en Notion: '{tarea}' asignada a {persona}. 📝"
+                        aviso = f"¡Excelente! Anoté en Notion: '{tarea}' asignada a {persona} con prioridad *{prioridad}*. 📝"
+                        if plazo:
+                            aviso += f" Plazo: {plazo}."
+                            
                         if notificado:
-                            aviso += f"\n💬 Ya le envié la notificación privada a su Telegram."
+                            aviso += f"\n💬 Ya le envié la notificación privada detallada a su Telegram."
                         else:
-                            aviso += f"\n⚠️ No se pudo enviar mensaje por Telegram (¿Esa persona tiene el ID cargado en Render y ya inició chat con el bot?)."
+                            aviso += f"\n⚠️ No se pudo enviar mensaje por Telegram (¿ID no cargado o chat no iniciado?)."
                         
                         bot.reply_to(message, aviso)
                     else:
-                        bot.reply_to(message, "No pude guardar la tarea en Notion. Verificá los permisos del bot.")
+                        bot.reply_to(message, "No pude guardar la tarea en Notion. Verificá los nombres de las columnas.")
                 else:
                     bot.reply_to(message, "Formato de tarea incorrecto.")
             
@@ -213,5 +335,34 @@ def handle_message(message):
         except Exception as e:
             bot.reply_to(message, f"Error: {str(e)}")
 
+# --- SERVIDOR HTTP PARA CRONJOBS (Pinger y Recordatorios) ---
+class WebhookHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        if self.path == "/" or self.path == "":
+            self.send_response(200)
+            self.send_header("Content-type", "text/plain")
+            self.end_headers()
+            self.wfile.write(b"Bot activo y despierto")
+            
+        elif self.path == "/recordatorio":
+            self.send_response(200)
+            self.send_header("Content-type", "text/plain")
+            self.end_headers()
+            resultado = enviar_reporte_matutino()
+            self.wfile.write(resultado.encode("utf-8"))
+        else:
+            self.send_response(404)
+            self.end_headers()
+
+def run_server():
+    port = int(os.environ.get("PORT", 10000))
+    server = HTTPServer(("0.0.0.0", port), WebhookHandler)
+    print(f"Servidor web escuchando en el puerto {port}...")
+    server.serve_forever()
+
+server_thread = threading.Thread(target=run_server, daemon=True)
+server_thread.start()
+
 print("Bot final encendido...")
 bot.infinity_polling()
+    
