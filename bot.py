@@ -85,13 +85,12 @@ def agregar_tarea_notion_completa(nombre_tarea, persona, fecha_plazo=None, prior
     
     try:
         response = requests.post(url, json=data, headers=headers)
-        print(f"DEBUG NOTION - Status Code: {response.status_code}")
         return response.status_code == 200
     except Exception as e:
         print(f"DEBUG NOTION - Error de conexión: {e}")
         return False
 
-# --- NOTION: ACTUALIZAR ESTADO (Listo o En progreso) ---
+# --- NOTION: ACTUALIZAR ESTADO ---
 def actualizar_estado_tarea(nombre_tarea_aproximado, persona_name, nuevo_estado):
     url = f"https://api.notion.com/v1/databases/{NOTION_DATABASE_ID}/query"
     headers = {
@@ -297,16 +296,13 @@ def consultar_gemini(prompt_usuario):
                     "Si te pide agendar, responde EXCLUSIVAMENTE con este formato:\n"
                     "AGENDAR|Titulo del evento|YYYY-MM-DDTHH:MM:SS|YYYY-MM-DDTHH:MM:SS|Breve descripcion\n\n"
                     "2. REGISTRAR EN NOTION:\n"
-                    "Si te pide anotar una tarea para un miembro del equipo (Emi, Delfi, Renzo, Santi o Ari), analiza muy bien el texto buscando plazos (fechas, días de la semana, 'hoy', 'mañana') e importancia (si es urgente o no).\n"
-                    "Responde EXCLUSIVAMENTE con este formato:\n"
+                    "Si te pide anotar una tarea para un miembro del equipo (Emi, Delfi, Renzo, Santi o Ari), responde EXCLUSIVAMENTE con este formato:\n"
                     "NOTION|Titulo de la tarea|PersonaAsignada|YYYY-MM-DD|Prioridad\n\n"
                     "Reglas para NOTION:\n"
                     "- 'PersonaAsignada' debe ser estrictamente: Emi, Delfi, Renzo, Santi o Ari.\n"
-                    "- 'YYYY-MM-DD' es la fecha límite. Si el usuario no menciona una fecha o plazo, escribe 'None'. Si menciona un día de la semana (ej. 'el sábado'), calcula a qué fecha corresponde según el día de hoy.\n"
-                    "- 'Prioridad' debe ser estrictamente uno de estos tres valores: Alto, Medio o Bajo (Si dice 'urgente' o similar usa Alto. Si no se infiere importancia, usa Medio).\n\n"
-                    "Ejemplo 1: NOTION|Enviar presupuesto a Garibaldi|Delfi|2026-07-18|Alto\n"
-                    "Ejemplo 2: NOTION|Editar video de Rosaura|Renzo|None|Medio\n\n"
-                    "Si no pide agendar ni registrar tareas, responde como tu amigable asistente virtual normalmente.\n\n"
+                    "- 'YYYY-MM-DD' es la fecha límite (o 'None').\n"
+                    "- 'Prioridad' debe ser: Alto, Medio o Bajo.\n\n"
+                    "Si el usuario no pide agendar ni registrar tareas, responde como tu amigable asistente virtual normalmente.\n\n"
                     f"Mensaje del usuario: {prompt_usuario}"
                 )}]
             }
@@ -314,14 +310,13 @@ def consultar_gemini(prompt_usuario):
         "generationConfig": {"temperature": 0.3}
     }
     
-    response = requests.post(url, json=data, headers=headers)
-    if response.status_code == 200:
-        try:
+    try:
+        response = requests.post(url, json=data, headers=headers)
+        if response.status_code == 200:
             return response.json()['candidates'][0]['content']['parts'][0]['text'].strip()
-        except (KeyError, IndexError):
-            return "Error al procesar la respuesta del modelo."
-    else:
-        return f"Error de conexión (Código {response.status_code}): {response.text}"
+    except Exception as e:
+        print(f"Error consultando Gemini: {e}")
+    return "Error de conexión con el motor de inteligencia artificial."
 
 # --- MANEJADORES DE TELEGRAM ---
 @bot.message_handler(commands=['start', 'help'])
@@ -334,18 +329,44 @@ def handle_message(message):
     is_private = message.chat.type == "private"
     is_mentioned = BOT_USERNAME in message.text if (message.text and BOT_USERNAME) else False
 
+    # Identificar quién está mandando el mensaje
     persona_remitente = None
     for key, val in TELEGRAM_IDS.items():
         if val and int(val) == usuario_id:
             persona_remitente = key
             break
 
-    # 1. ATAJOS DE EQUIPO (Iniciar tarea o completarla)
+    # 1. FLUJOS EXCLUSIVOS DEL EQUIPO (En privado)
     if is_private and persona_remitente:
-        texto = message.text.lower()
+        texto = message.text.lower().strip()
         
-        # Detectar "En progreso"
-        if any(x in texto for x in ["empecé", "empece", "arranqué", "arranque", "progreso", "estoy con"]):
+        # --- NUEVO ATAJO: CONSULTAR MIS PROPIAS TAREAS ---
+        if any(x in texto for x in ["mis tareas", "tengo tareas", "tengo alguna tarea", "que tengo que hacer", "que tareas tengo"]):
+            print(f"DEBUG CONSULTA - {persona_remitente} consultó sus tareas.")
+            pendientes = obtener_pendientes_notion()
+            
+            # Buscamos el bloque de tareas de esta persona
+            bloques = pendientes.get(persona_remitente)
+            
+            if not bloques or (not bloques["sin_empezar"] and not bloques["en_progreso"]):
+                bot.reply_to(message, f"🙌 ¡Al día, {persona_remitente}! No tenés ninguna tarea pendiente asignada en Notion. ¡Excelente!")
+                return
+                
+            mensaje = f"📝 *Tus tareas pendientes actuales en Colussi AV, {persona_remitente}:*\n\n"
+            
+            if bloques["en_progreso"]:
+                mensaje += "⏳ *EN PROGRESO:*\n"
+                mensaje += "\n".join([f"  🔹 {t}" for t in bloques["en_progreso"]]) + "\n\n"
+                
+            if bloques["sin_empezar"]:
+                mensaje += "💤 *SIN EMPEZAR:*\n"
+                mensaje += "\n".join([f"  🔹 {t}" for t in bloques["sin_empezar"]]) + "\n\n"
+                
+            bot.reply_to(message, mensaje, parse_mode="Markdown")
+            return
+        
+        # --- ATAJO: EN PROGRESO ---
+        elif any(x in texto for x in ["empecé", "empece", "arranqué", "arranque", "progreso", "estoy con"]):
             filtro = texto.replace("empecé", "").replace("empece", "").replace("arranqué", "").replace("arranque", "").replace("progreso", "").replace("estoy con", "").replace("la tarea", "").replace("de", "").strip()
             tarea = actualizar_estado_tarea(filtro, persona_remitente, "En progreso")
             if tarea:
@@ -354,7 +375,7 @@ def handle_message(message):
                 bot.reply_to(message, "No encontré esa tarea activa asignada a vos.")
             return
 
-        # Detectar "Listo"
+        # --- ATAJO: LISTO / COMPLETADO ---
         elif any(x in texto for x in ["listo", "terminé", "termine"]):
             filtro = texto.replace("listo", "").replace("terminé", "").replace("termine", "").replace("la tarea", "").replace("de", "").strip()
             tarea = actualizar_estado_tarea(filtro, persona_remitente, "Listo")
@@ -364,7 +385,7 @@ def handle_message(message):
                 bot.reply_to(message, "No encontré esa tarea asignada a vos.")
             return
 
-    # 2. LÓGICA DE EMILIANO (Asignación o conversación con Gemini)
+    # 2. LÓGICA DE EMILIANO (Asignación o conversación normal)
     if is_private or is_mentioned:
         clean_text = message.text.replace(f"@{BOT_USERNAME}", "").strip() if BOT_USERNAME else message.text.strip()
         if not clean_text:
