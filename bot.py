@@ -24,7 +24,7 @@ TELEGRAM_IDS = {
 }
 
 # Solo Emiliano recibe las alertas de avance en privado
-ADMIN_TELEGRAM_ID = 8802307065
+ADMIN_TELEGRAM_ID = int(os.environ.get("TELEGRAM_ID_EMI")) if os.environ.get("TELEGRAM_ID_EMI") else 8802307065
 CALENDAR_ID = "colussi.av@gmail.com"
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
