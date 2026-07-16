@@ -5,8 +5,6 @@ import json
 import datetime
 from datetime import timedelta
 import base64
-from google.oauth2 import service_account
-from googleapiclient.discovery import build
 from http.server import BaseHTTPRequestHandler, HTTPServer
 import threading
 
@@ -16,7 +14,7 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 NOTION_API_KEY = os.environ.get("NOTION_API_KEY")
 NOTION_DATABASE_ID = os.environ.get("NOTION_DATABASE_ID")
 
-# --- MAPEO DE USUARIOS ---
+# --- MAPEO DE INTEGRANTES DE COLUSSI AV ---
 TELEGRAM_IDS = {
     "Delfi": os.environ.get("TELEGRAM_ID_DELFI"),
     "Renzo": os.environ.get("TELEGRAM_ID_RENZO"),
@@ -25,7 +23,7 @@ TELEGRAM_IDS = {
     "Emi": os.environ.get("TELEGRAM_ID_EMI")
 }
 
-# Solo Emiliano recibe notificaciones de progreso/completado
+# Solo Emiliano recibe las alertas de avance en privado
 ADMIN_TELEGRAM_ID = 8802307065
 CALENDAR_ID = "colussi.av@gmail.com"
 
@@ -43,7 +41,7 @@ SYSTEM_INSTRUCTION = (
     "a organizarse, coordinar rodajes, redactar ideas y gestionar tareas cotidianas de forma prolija, amigable y muy profesional."
 )
 
-# --- GOOGLE CALENDAR ---
+# --- GOOGLE CALENDAR (Standby) ---
 def obtener_servicio_calendar():
     return None
 
@@ -59,7 +57,7 @@ def agregar_tarea_notion_completa(nombre_tarea, persona, fecha_plazo=None, prior
         "Notion-Version": "2022-06-28"
     }
     
-    # REGLA 3: Si contiene la palabra "presupuesto", se designa automáticamente como Alto (urgente)
+    # REGLA 3: Si contiene la palabra "presupuesto", se marca automáticamente como Alto (urgente)
     if "presupuesto" in nombre_tarea.lower():
         prioridad = "Alto"
         
@@ -112,7 +110,7 @@ def obtener_pendientes_notion():
         resultados = response.json().get("results", [])
         pendientes_por_persona = {}
         
-        # Fecha de ayer para calcular vencimiento de presupuestos (1 día de margen)
+        # Fecha de ayer para calcular vencimiento de presupuestos (1 día de margen de demora)
         ayer = (datetime.datetime.utcnow() - timedelta(hours=3) - timedelta(days=1)).strftime('%Y-%m-%d')
         
         for pagina in resultados:
@@ -133,7 +131,7 @@ def obtener_pendientes_notion():
             plazo_data = propiedades.get("Plazo", {}).get("date")
             plazo = plazo_data.get("start") if plazo_data else None
             
-            # REGLA: Alerta de presupuestos vencidos por más de 1 día
+            # Alerta de presupuestos vencidos por más de 1 día
             es_presupuesto = "presupuesto" in nombre_tarea.lower()
             esta_vencido = es_presupuesto and plazo and (plazo <= ayer)
             
@@ -155,7 +153,7 @@ def obtener_pendientes_notion():
         print(f"Error en obtener_pendientes_notion: {e}")
         return {}
 
-# --- NOTION: BUSCAR TAREAS COINCIDENTES PARA ACTUALIZACIÓN ---
+# --- NOTION: BUSCAR TAREAS COINCIDENTES ---
 def buscar_tareas_candidatas(nombre_tarea_aproximado, persona_name):
     url = f"https://api.notion.com/v1/databases/{NOTION_DATABASE_ID}/query"
     headers = {
@@ -238,7 +236,6 @@ def enviar_alerta_telegram(persona, nombre_tarea, fecha_plazo=None, prioridad="M
         
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     
-    # REGLA 3: Si es un presupuesto se pone como Alto (Urgente)
     if "presupuesto" in nombre_tarea.lower():
         prioridad = "Alto"
         
@@ -328,7 +325,8 @@ def consultar_gemini(prompt_usuario):
                     "Si te pide agendar, responde EXCLUSIVAMENTE con este formato:\n"
                     "AGENDAR|Titulo del evento|YYYY-MM-DDTHH:MM:SS|YYYY-MM-DDTHH:MM:SS|Breve descripcion\n\n"
                     "2. REGISTRAR EN NOTION:\n"
-                    "Si te pide anotar una tarea para un miembro del equipo (Emi, Delfi, Renzo, Santi o Ari), responde EXCLUSIVAMENTE con este formato:\n"
+                    "Si te pide anotar una tarea para un miembro del equipo (Emi, Delfi, Renzo, Santi o Ari), analiza el texto buscando plazos e importancia.\n"
+                    "Responde EXCLUSIVAMENTE con este formato:\n"
                     "NOTION|Titulo de la tarea|PersonaAsignada|YYYY-MM-DD|Prioridad\n\n"
                     "Reglas para NOTION:\n"
                     "- 'PersonaAsignada' debe ser estrictamente: Emi, Delfi, Renzo, Santi o Ari.\n"
@@ -437,7 +435,7 @@ def callback_handler(call):
                 text=f"{emoji} ¡Hecho! Pasé la tarea *'{titulo}'* a *{nuevo_estado}*.",
                 parse_mode="Markdown"
             )
-            # REGLA 2: Enviamos notificación de feedback a Emiliano en privado
+            # Enviamos notificación de feedback a Emiliano en privado
             notificar_cambio_a_emiliano(persona, titulo, nuevo_estado)
         else:
             bot.answer_callback_query(call.id, "No se pudo actualizar en Notion.")
@@ -466,11 +464,11 @@ def procesar_cambio_estado(texto, persona_remitente, message):
         bot.reply_to(message, f"No encontré ninguna tarea activa asignada a vos que coincida con '{filtro}'.")
         return True
         
-    # REGLA 4: Robustez si hay más de una tarea coincidente (Flujo híbrido)
+    # Robustez si hay más de una tarea coincidente (Flujo híbrido)
     if len(candidatas) > 1:
         markup = telebot.types.InlineKeyboardMarkup(row_width=1)
         for cand in candidatas:
-            # Recortamos texto para evitar errores de longitud en Telegram
+            # Recortamos texto para evitar errores de longitud en los callback_data de Telegram (máx 64b)
             callback_data = json.dumps({"id": cand["id"][:15], "est": nuevo_estado[:3], "p": persona_remitente[:3]})
             markup.add(telebot.types.InlineKeyboardButton(cand["titulo"], callback_data=callback_data))
         bot.reply_to(message, "Tengo varias tareas que coinciden. Seleccioná cuál querés actualizar:", reply_markup=markup)
@@ -483,7 +481,6 @@ def procesar_cambio_estado(texto, persona_remitente, message):
     if aplicar_estado_por_id(id_tarea, nuevo_estado):
         emoji = "🚀" if nuevo_estado == "En progreso" else "🎉"
         bot.reply_to(message, f"{emoji} ¡Bárbaro {persona_remitente}! Pasé la tarea *'{titulo_tarea}'* a *{nuevo_estado}*.", parse_mode="Markdown")
-        # Feedback solo a Emiliano
         notificar_cambio_a_emiliano(persona_remitente, titulo_tarea, nuevo_estado)
     else:
         bot.reply_to(message, "No pude actualizar Notion en este momento.")
@@ -495,7 +492,7 @@ def handle_voice_message(message):
     usuario_id = message.from_user.id
     is_private = message.chat.type == "private"
     
-    # Filtro estricto: Solo integrantes registrados pueden hablarle al bot
+    # Filtro estricto: Solo integrantes de Colussi AV
     persona_remitente = None
     for key, val in TELEGRAM_IDS.items():
         if val and int(val) == usuario_id:
@@ -509,11 +506,11 @@ def handle_voice_message(message):
         try:
             status_msg = bot.reply_to(message, "🎤 *Escuchando nota de voz...* ⏳", parse_mode="Markdown")
             
-            # Descargar el audio
+            # Descargamos el audio de Telegram
             file_info = bot.get_file(message.voice.file_id)
             downloaded_file = bot.download_file(file_info.file_path)
             
-            # Gemini procesa el audio
+            # Gemini procesa el audio directamente de forma nativa y gratis
             respuesta_ai = consultar_gemini_con_audio(downloaded_file)
             bot.delete_message(message.chat.id, status_msg.message_id)
             
@@ -522,7 +519,7 @@ def handle_voice_message(message):
             if procesar_cambio_estado(texto_limpio, persona_remitente, message):
                 return
                 
-            # Restricción de roles para creación de tareas por audio
+            # Restricción de roles para creación de tareas por audio (Solo Emi y Delfi)
             if respuesta_ai.startswith("NOTION|") or respuesta_ai.startswith("AGENDAR|"):
                 if persona_remitente not in ["Emi", "Delfi"]:
                     bot.reply_to(message, "Lo siento, no tenés permisos para asignar tareas globales.")
@@ -539,7 +536,7 @@ def handle_voice_message(message):
                         notificado = enviar_alerta_telegram(persona, tarea, plazo, prioridad)
                         aviso = f"¡Excelente! Anoté en Notion: '{tarea}' asignada a {persona}."
                         if notificado:
-                            aviso += f"\n💬 Notificación privada enviada."
+                            aviso += f"\n💬 Notificación privada enviada a su Telegram."
                         bot.reply_to(message, aviso)
             else:
                 bot.reply_to(message, respuesta_ai)
@@ -567,7 +564,7 @@ def handle_message(message):
     if is_private or is_mentioned:
         texto = message.text.lower().strip()
         
-        # 1. ACCESO GLOBAL A CONSULTAS (REGLA 1: Solo Emi y Delfi ven todo)
+        # 1. ACCESO GLOBAL A CONSULTAS (Solo Emi y Delfi ven todo)
         if any(x in texto for x in ["reporte general", "como venimos", "tareas generales", "todas las tareas"]):
             if persona_remitente not in ["Emi", "Delfi"]:
                 bot.reply_to(message, "Lo siento, solo Emiliano y Delfi pueden solicitar el reporte general de la productora.")
@@ -620,7 +617,7 @@ def handle_message(message):
             bot.reply_to(message, "Solo Emiliano y Delfi tienen permisos de administración.")
             return
 
-        # Consultar Gemini para agendar o registrar tarea
+        # Consultar Gemini
         try:
             respuesta_ai = consultar_gemini(clean_text)
             
@@ -639,13 +636,12 @@ def handle_message(message):
                     if agregar_tarea_notion_completa(tarea, persona, plazo, prioridad):
                         notificado = enviar_alerta_telegram(persona, tarea, plazo, prioridad)
                         
-                        # Alerta visual en el aviso si es presupuesto
                         es_presu = "presupuesto" in tarea.lower()
                         prioridad_aviso = "Alto (Urgente ⚠️)" if es_presu else prioridad
                         
                         aviso = f"¡Excelente! Anoté en Notion: '{tarea}' asignada a {persona} con prioridad *{prioridad_aviso}*. 📝"
                         if notificado:
-                            aviso += f"\n💬 Ya le envié la notificación privada."
+                            aviso += f"\n💬 Notificación privada enviada a su Telegram."
                         bot.reply_to(message, aviso)
             else:
                 bot.reply_to(message, respuesta_ai)
