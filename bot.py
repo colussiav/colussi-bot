@@ -35,12 +35,12 @@ except Exception as e:
 
 # --- INSTRUCCIÓN GENERAL PARA COLU ---
 SYSTEM_INSTRUCTION = (
-    "Eres 'COLU', el asistente virtual oficial de 'Colussi Audiovisuales'. "
-    "Tu tono es profesional, educado, sofisticado y sumamente eficiente. "
+    "Eres 'COLU', el asistente virtual de inteligencia artificial oficial de 'Colussi Audiovisuales'. "
+    "Tu tono es profesional, de estudio sofisticado y sumamente eficiente. "
     "Conoces a la perfección el rubro audiovisual (cámaras, iluminación, postproducción, flujos de trabajo, setups de cine). "
     "Tu misión es facilitar la gestión del estudio para Emi, Delfi, Renzo, Santi y Ari. "
-    "Responde siempre de forma clara, concisa y profesional mediante mensajes de texto. Ve directo al grano. "
-    "REGLA DE ORO PARA PLAZOS: Si el usuario NO menciona explícitamente un límite de tiempo (como 'para mañana', 'el viernes'), "
+    "Responde siempre de forma clara, concisa y directa mediante texto. Ve directo al grano. "
+    "REGLA DE ORO PARA PLAZOS: Si el usuario NO menciona explícitamente un límite de tiempo, "
     "debes colocar obligatoriamente 'None' en el campo de fecha. Queda terminantemente PROHIBIDO inventar plazos."
 )
 
@@ -82,9 +82,7 @@ def obtener_pendientes_notion():
     }
     try:
         response = requests.post(url, headers=headers)
-        if response.status_code != 200:
-            return {}
-            
+        if response.status_code != 200: return {}
         resultados = response.json().get("results", [])
         pendientes_por_persona = {}
         ayer = (datetime.datetime.utcnow() - timedelta(hours=3) - timedelta(days=1)).strftime('%Y-%m-%d')
@@ -92,8 +90,7 @@ def obtener_pendientes_notion():
         for pagina in resultados:
             propiedades = pagina.get("properties", {})
             estado = propiedades.get("Estado", {}).get("status", {}).get("name", "Sin empezar")
-            if estado == "Listo":
-                continue
+            if estado == "Listo": continue
                 
             titulo_data = propiedades.get("Nombre de la tarea", {}).get("title", [])
             nombre_tarea = titulo_data[0].get("text", {}).get("content", "Tarea sin nombre") if titulo_data else "Tarea sin nombre"
@@ -104,17 +101,12 @@ def obtener_pendientes_notion():
             esta_vencido = es_presupuesto and plazo and (plazo <= ayer)
             
             nombre_con_alerta = nombre_tarea
-            if esta_vencido:
-                nombre_con_alerta = f"⚠️ VENCIDO: {nombre_tarea} [Plazo: {plazo}]"
+            if esta_vencido: nombre_con_alerta = f"⚠️ VENCIDO: {nombre_tarea} [Plazo: {plazo}]"
             
             if persona:
-                if persona not in pendientes_por_persona:
-                    pendientes_por_persona[persona] = {"sin_empezar": [], "en_progreso": []}
-                if estado == "En progreso":
-                    pendientes_por_persona[persona]["en_progreso"].append(nombre_con_alerta)
-                else:
-                    pendientes_por_persona[persona]["sin_empezar"].append(nombre_con_alerta)
-                
+                if persona not in pendientes_por_persona: pendientes_por_persona[persona] = {"sin_empezar": [], "en_progreso": []}
+                if estado == "En progreso": pendientes_por_persona[persona]["en_progreso"].append(nombre_con_alerta)
+                else: pendientes_por_persona[persona]["sin_empezar"].append(nombre_con_alerta)
         return pendientes_por_persona
     except Exception as e:
         print(f"Error Notion Query: {e}")
@@ -124,14 +116,7 @@ def obtener_pendientes_notion():
 def buscar_tareas_candidatas(nombre_tarea_aproximado, persona_name):
     url = f"https://api.notion.com/v1/databases/{NOTION_DATABASE_ID}/query"
     headers = {"Authorization": f"Bearer {NOTION_API_KEY}", "Content-Type": "application/json", "Notion-Version": "2022-06-28"}
-    filter_data = {
-        "filter": {
-            "and": [
-                {"property": "Asignado", "select": {"equals": persona_name}},
-                {"property": "Estado", "status": {"does_not_equal": "Listo"}}
-            ]
-        }
-    }
+    filter_data = {"filter": {"and": [{"property": "Asignado", "select": {"equals": persona_name}}, {"property": "Estado", "status": {"does_not_equal": "Listo"}}]}}
     try:
         response = requests.post(url, json=filter_data, headers=headers)
         if response.status_code != 200: return []
@@ -158,13 +143,7 @@ def aplicar_estado_por_id(page_id, nuevo_estado):
 def notificar_cambio_a_emiliano(persona, tarea, nuevo_estado):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     emoji = "🚀" if nuevo_estado == "En progreso" else "🎉"
-    mensaje = (
-        f"🤖 *COLU - Reporte de Avance* {emoji}\n\n"
-        f"*{persona}* ha actualizado una tarea:\n"
-        f"▪️ *Tarea:* '{tarea}'\n"
-        f"▪️ *Estado actual:* {nuevo_estado}\n\n"
-        f"Todo asentado en la base de datos."
-    )
+    mensaje = (f"🤖 *COLU - Reporte de Avance* {emoji}\n\n*{persona}* ha actualizado una tarea:\n▪️ *Tarea:* '{tarea}'\n▪️ *Estado actual:* {nuevo_estado}\n\nTodo asentado en la base de datos.")
     try: requests.post(url, json={"chat_id": ADMIN_TELEGRAM_ID, "text": mensaje, "parse_mode": "Markdown"})
     except: pass
 
@@ -180,48 +159,61 @@ def enviar_alerta_telegram(persona, nombre_tarea, fecha_plazo=None, prioridad="M
     try: return requests.post(url, json={"chat_id": telegram_id, "text": mensaje, "parse_mode": "Markdown"}).status_code == 200
     except: return False
 
-# --- CONEXIÓN CON GEMINI TEXTO ULTRAESTABLE (1.5-FLASH) ---
+# --- CONEXIÓN ORIGINAL RESTAURADA CON GEMINI 3.1-FLASH-LITE ---
 def consultar_gemini(prompt_usuario, nombre_emisor):
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent?key={GEMINI_API_KEY}"
     headers = {"Content-Type": "application/json"}
     hora_arg = datetime.datetime.utcnow() - timedelta(hours=3)
+    fecha_actual_str = hora_arg.strftime('%Y-%m-%d %H:%M')
     
     data = {
-        "contents": [{
-            "role": "user",
-            "parts": [{"text": (
-                f"{SYSTEM_INSTRUCTION}\n\n"
-                f"Hoy es {hora_arg.strftime('%Y-%m-%d %H:%M')} (Argentina).\n"
-                "Formatos especiales estrictos si se te solicita crear una tarea:\n"
-                "NOTION|Titulo de la tarea|PersonaAsignada|YYYY-MM-DD|Prioridad\n"
-                "PersonaAsignada debe ser exactamente: Emi, Delfi, Renzo, Santi o Ari.\n\n"
-                f"Mensaje de {nombre_emisor}: {prompt_usuario}"
-            )}]
-        }],
-        "generationConfig": {"temperature": 0.3}
+        "contents": [
+            {
+                "role": "user",
+                "parts": [{"text": (
+                    f"{SYSTEM_INSTRUCTION}\n\n"
+                    f"Hoy es {fecha_actual_str} (Huso horario de Argentina).\n"
+                    f"Le estás respondiendo a: {nombre_emisor}.\n\n"
+                    "Formatos especiales:\n"
+                    "NOTION|Titulo de la tarea|PersonaAsignada|YYYY-MM-DD|Prioridad\n"
+                    "PersonaAsignada debe ser estrictamente el nombre de la persona a quien va la tarea: Emi, Delfi, Renzo, Santi o Ari.\n"
+                    f"Mensaje de {nombre_emisor}: {prompt_usuario}"
+                )}]
+            }
+        ],
+        "generationConfig": {"temperature": 0.2}
     }
     try:
         res = requests.post(url, json=data, headers=headers)
         if res.status_code == 200: 
             return res.json()['candidates'][0]['content']['parts'][0]['text'].strip()
     except Exception as e:
-        print(f"Error Gemini: {e}")
+        print(f"Error Gemini Original: {e}")
     return "Disculpe, Señor. Tuve un inconveniente al procesar la solicitud."
 
-# --- PROCESAMIENTO DE AUDIO MEJORADO (STT) ---
+# --- PROCESAMIENTO DE AUDIO ORIGINAL RESTAURADO (STT) ---
 def transcribir_audio_con_gemini(audio_bytes):
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent?key={GEMINI_API_KEY}"
     headers = {"Content-Type": "application/json"}
     audio_b64 = base64.b64encode(audio_bytes).decode("utf-8")
+    
     data = {
-        "contents": [{"role": "user", "parts": [{"inline_data": {"mime_type": "audio/ogg", "data": audio_b64}}, {"text": "Transcribe este audio de forma exacta, literal y limpia sin comentarios adicionales."}]}],
+        "contents": [
+            {
+                "role": "user",
+                "parts": [
+                    {"inline_data": {"mime_type": "audio/ogg", "data": audio_b64}},
+                    {"text": "Transcribe este audio de voz a texto de forma exacta, literal, respetando los nombres propios del español latino. Devuelve única y exclusivamente la transcripción limpia sin comentarios adicionales."}
+                ]
+            }
+        ],
         "generationConfig": {"temperature": 0.0}
     }
     try:
         res = requests.post(url, json=data, headers=headers)
         if res.status_code == 200: return res.json()['candidates'][0]['content']['parts'][0]['text'].strip()
     except Exception as e:
-        print(f"Error STT: {e}")
+        print(f"Error STT Original: {e}")
     return None
 
 # --- EVALUADOR DE COMANDOS DIRECTOS DE NOTION ---
@@ -298,13 +290,10 @@ def handle_voice_message(message):
 def handle_message(message):
     usuario_id = message.from_user.id
     persona_remitente = next((k for k, v in TELEGRAM_IDS.items() if v and int(v) == usuario_id), None)
-    
-    if not persona_remitente:
-        return
+    if not persona_remitente: return
 
     texto = message.text.lower().strip()
-    if ejecutar_comando_notion(texto, persona_remitente, message):
-        return
+    if ejecutar_comando_notion(texto, persona_remitente, message): return
 
     try:
         respuesta_ai = consultar_gemini(message.text, persona_remitente)
@@ -353,7 +342,7 @@ class WebhookHandler(BaseHTTPRequestHandler):
         if self.path in ["/", ""]:
             self.send_response(200)
             self.end_headers()
-            self.wfile.write(b"COLU Text Engine Online.")
+            self.wfile.write(b"COLU Engine Online.")
         else:
             self.send_response(404)
             self.end_headers()
