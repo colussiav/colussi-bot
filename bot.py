@@ -35,7 +35,7 @@ except Exception as e:
 # --- INSTRUCCIÓN GENERAL PARA COLU ---
 SYSTEM_INSTRUCTION = (
     "Eres 'COLU', el asistente virtual oficial de 'Colussi Audiovisuales'. "
-    "Tu tono es profesional, educado, sofisticado y sumamente eficiente. "
+    "Tu tono es profesional, educado, sophisticated y sumamente eficiente. "
     "Conoces a la perfección el rubro audiovisual (cámaras, iluminación, postproducción, flujos de trabajo, setups de cine). "
     "Tu misión es facilitar la gestión del estudio para Emi, Delfi, Renzo, Santi y Ari. "
     "Responde siempre de forma clara, concisa y profesional en texto. Ve directo al grano. "
@@ -154,7 +154,7 @@ def aplicar_estado_por_id(page_id, nuevo_estado):
     return res.status_code == 200
 
 # --- TELEGRAM: NOTIFICACIONES ---
-def notificar_cambio a_emiliano(persona, tarea, nuevo_estado):
+def notificar_cambio_a_emiliano(persona, tarea, nuevo_estado):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     emoji = "🚀" if nuevo_estado == "En progreso" else "🎉"
     mensaje = (
@@ -207,7 +207,7 @@ def consultar_gemini(prompt_usuario, nombre_emisor):
         print(f"Error Gemini: {e}")
     return "Disculpe, Señor. Tuve un inconveniente al procesar la solicitud."
 
-# --- EVALUADOR DE COMANDOS DIRECTOS DE NOTION (EVITA ALUCINACIONES) ---
+# --- EVALUADOR DE COMANDOS DIRECTOS DE NOTION ---
 def ejecutar_comando_notion(texto, persona_remitente, message):
     texto_lower = texto.lower().strip()
     
@@ -219,7 +219,7 @@ def ejecutar_comando_notion(texto, persona_remitente, message):
         if not pendientes:
             bot.reply_to(message, "Excelente. No hay tareas pendientes en toda la productora.")
             return True
-        mensaje = "📋 *Estado General de Producción - Colussi AV:*\n\n"
+        mensaje = "📋 *Estado General de Production - Colussi AV:*\n\n"
         for pers, bloques in pendientes.items():
             mensaje += f"👤 *{pers}:*\n"
             if bloques["en_progreso"]: mensaje += "  ⏳ *En progreso:*\n" + "\n".join([f"    🔹 {t}" for t in bloques["en_progreso"]]) + "\n"
