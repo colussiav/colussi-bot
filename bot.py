@@ -14,7 +14,7 @@ TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 NOTION_API_KEY = os.environ.get("NOTION_API_KEY")
 NOTION_DATABASE_ID = os.environ.get("NOTION_DATABASE_ID")
-ELEVENLABS_API_KEY = os.environ.get("ELEVENLABS_API_KEY") # <-- Cambiado para máxima seguridad
+ELEVENLABS_API_KEY = os.environ.get("ELEVENLABS_API_KEY")
 
 # --- MAPEO DE INTEGRANTES DE COLUSSI AV ---
 TELEGRAM_IDS = {
@@ -324,11 +324,12 @@ def enviar_respuesta_de_voz(chat_id, texto_respuesta, reply_to_message_id):
             audio_memoria.seek(0)
             bot.send_voice(chat_id=chat_id, voice=audio_memoria, reply_to_message_id=reply_to_message_id)
         else:
+            error_msg = f"⚠️ Error de Voz ({response.status_code}): {response.text}\n\nRespuesta original:\n{texto_respuesta}"
             print(f"Error ElevenLabs API Status: {response.status_code} - {response.text}")
-            bot.send_message(chat_id, texto_respuesta, reply_to_message_id=reply_to_message_id)
+            bot.send_message(chat_id, error_msg, reply_to_message_id=reply_to_message_id)
     except Exception as e:
         print(f"Error conectando con ElevenLabs: {e}")
-        bot.send_message(chat_id, texto_respuesta, reply_to_message_id=reply_to_message_id)
+        bot.send_message(chat_id, f"⚠️ Error de conexión de voz: {e}\n\n{texto_respuesta}", reply_to_message_id=reply_to_message_id)
 
 # --- CONEXIÓN CON GEMINI TEXTO ---
 def consultar_gemini(prompt_usuario, nombre_emisor):
@@ -391,11 +392,10 @@ def transcribir_audio_con_gemini(audio_bytes):
         print(f"Error en STT: {e}")
     return None
 
-# --- EVALUADOR CENTRAL DE COMANDOS INTERNOS DE NOTION (EVITA ALUCINACIONES) ---
+# --- EVALUADOR CENTRAL DE COMANDOS INTERNOS DE NOTION ---
 def ejecutar_comando_notion(texto, persona_remitente, message, usar_audio=False):
     texto_lower = texto.lower().strip()
     
-    # 1. Filtro unificado de Reporte General
     if any(x in texto_lower for x in ["reporte", "reporte general", "como venimos", "todas las tareas", "tareas tiene el equipo", "tareas de todo el equipo"]):
         if persona_remitente not in ["Emi", "Delfi"]:
             msg = "Lo lamento, no cuentas con los permisos de acceso requeridos."
@@ -423,7 +423,6 @@ def ejecutar_comando_notion(texto, persona_remitente, message, usar_audio=False)
         else: bot.reply_to(message, mensaje, parse_mode="Markdown")
         return True
 
-    # 2. Filtro unificado de Tareas Individuales
     if any(x in texto_lower for x in ["mis tareas", "que tengo que hacer", "que tareas tengo"]):
         pendientes = obtener_pendientes_notion()
         bloques = pendientes.get(persona_remitente)
@@ -443,13 +442,12 @@ def ejecutar_comando_notion(texto, persona_remitente, message, usar_audio=False)
         else: bot.reply_to(message, mensaje, parse_mode="Markdown")
         return True
 
-    # 3. Filtro de cambio de estados
     if procesar_cambio_estado(texto_lower, persona_remitente, message, usar_audio=usar_audio):
         return True
 
     return False
 
-# --- RECEPTOR DE NOTAS DE VOZ ---
+# --- RECEPTOR DE NOTAS DE VOZ (CORREGIDO CON DESCARGA HTTP DIRECTA) ---
 @bot.message_handler(content_types=['voice'])
 def handle_voice_message(message):
     usuario_id = message.from_user.id
@@ -459,8 +457,16 @@ def handle_voice_message(message):
         return
 
     try:
+        # Descarga HTTP Directa para máxima fidelidad y compatibilidad de búfer
         file_info = bot.get_file(message.voice.file_id)
-        downloaded = bot.download_file(file_info.file_path)
+        file_url = f"https://api.telegram.org/file/bot{TELEGRAM_TOKEN}/{file_info.file_path}"
+        response_audio = requests.get(file_url)
+        
+        if response_audio.status_code != 200:
+            print("Error descargando el archivo desde los servidores de Telegram.")
+            return
+
+        downloaded = response_audio.content
         
         # Transcribimos primero el audio a texto limpio
         texto_transcrito = transcribir_audio_con_gemini(downloaded)
@@ -470,11 +476,9 @@ def handle_voice_message(message):
             
         print(f"Audio de {persona_remitente} traducido a texto: '{texto_transcrito}'")
         
-        # Redirigir el texto transcrito por el evaluador central para evitar alucinaciones
         if ejecutar_comando_notion(texto_transcrito, persona_remitente, message, usar_audio=True):
             return
             
-        # Consultar a Gemini qué acción tomar si es una consulta normal o asignación
         respuesta_ai = consultar_gemini(texto_transcrito, persona_remitente)
         
         if respuesta_ai.startswith("NOTION|"):
@@ -505,11 +509,9 @@ def handle_message(message):
 
     texto = message.text.lower().strip()
     
-    # Procesar comandos por el evaluador central
     if ejecutar_comando_notion(texto, persona_remitente, message, usar_audio=False):
         return
 
-    # Restricción de creación general
     if persona_remitente not in ["Emi", "Delfi"]:
         bot.reply_to(message, "Acceso de administración denegado. Solo Emiliano y Delfi pueden reescribir la base de datos.")
         return
@@ -565,7 +567,7 @@ def procesar_cambio_estado(texto, persona_remitente, message, usar_audio=False):
         notificar_cambio_a_emiliano(persona_remitente, titulo_tarea, nuevo_estado)
     return True
 
-# --- SERVIDOR WEB: ADAPTADO PARA LAS 10:00 AM ---
+# --- SERVIDOR WEB ---
 class WebhookHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path in ["/", ""]:
