@@ -9,14 +9,12 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 import threading
 from io import BytesIO
 
-# Credenciales de Render
+# Credenciales de Render (Todas protegidas como variables de entorno ocultas)
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 NOTION_API_KEY = os.environ.get("NOTION_API_KEY")
 NOTION_DATABASE_ID = os.environ.get("NOTION_DATABASE_ID")
-
-# API Key de ElevenLabs integrada directamente
-ELEVENLABS_API_KEY = "sk_9f89e196b0f74d68fdfe5dba0589944723505a95f01608a4"
+ELEVENLABS_API_KEY = os.environ.get("ELEVENLABS_API_KEY") # <-- Cambiado para máxima seguridad
 
 # --- MAPEO DE INTEGRANTES DE COLUSSI AV ---
 TELEGRAM_IDS = {
