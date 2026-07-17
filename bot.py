@@ -8,14 +8,15 @@ import base64
 from http.server import BaseHTTPRequestHandler, HTTPServer
 import threading
 from io import BytesIO
-import asyncio
-import edge_tts
 
 # Credenciales de Render
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 NOTION_API_KEY = os.environ.get("NOTION_API_KEY")
 NOTION_DATABASE_ID = os.environ.get("NOTION_DATABASE_ID")
+
+# API Key de ElevenLabs integrada directamente
+ELEVENLABS_API_KEY = "sk_9f89e196b0f74d68fdfe5dba0589944723505a95f01608a4"
 
 # --- MAPEO DE INTEGRANTES DE COLUSSI AV ---
 TELEGRAM_IDS = {
@@ -26,7 +27,7 @@ TELEGRAM_IDS = {
     "Emi": os.environ.get("TELEGRAM_ID_EMI")
 }
 
-# Lee tu ID de administrador directamente desde la variable de Render
+# Lee tu ID de administrador directamente desde la variable de Render o fallback seguro
 ADMIN_TELEGRAM_ID = int(os.environ.get("TELEGRAM_ID_EMI")) if os.environ.get("TELEGRAM_ID_EMI") else 8802307065
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
@@ -40,10 +41,13 @@ except Exception as e:
 # --- INSTRUCCIÓN GENERAL PARA COLU ---
 SYSTEM_INSTRUCTION = (
     "Eres 'COLU', el asistente virtual de inteligencia artificial oficial de 'Colussi Audiovisuales'. "
-    "Tu tono es profesional, cercano, sofisticado y muy eficiente. "
+    "Tu tono es profesional, educado, sofisticado y sumamente eficiente. "
     "Conoces a la perfección el rubro audiovisual (cámaras, iluminación, postproducción, flujos de trabajo, setups de cámaras DSLR/Mirrorless y de cine). "
-    "Tu misión es facilitarle la vida a Emi, Delfi, Renzo, Santi y Ari. Sé proactivo y mantén la gestión del estudio impecable. "
-    "REGLA DE CONVERSACIÓN DE VOZ: Está terminantemente PROHIBIDO iniciar tus respuestas con un saludo repetitivo como 'Hola', 'Buen día' o mencionar el nombre de la persona al principio de cada mensaje (por ejemplo, evita empezar con 'Hola Emi,' o 'Hola Santi,'). Ve directo al grano, responde de forma fluida y natural para que la nota de voz sea dinámica y no repetitiva. "
+    "Tu misión es facilitar la gestión del estudio para Emi, Delfi, Renzo, Santi y Ari. "
+    "REGLA DE CONVERSACIÓN DE VOZ: Está terminantemente PROHIBIDO iniciar tus respuestas con un saludo repetitivo como 'Hola' o 'Buen día', "
+    "o mencionar el nombre del usuario al principio de cada mensaje. Ve directo al grano. "
+    "EVITA JERGAS LOCALES: No utilices palabras excesivamente regionalistas como 'che', 'bárbaro' o 'laburo' en tus respuestas, "
+    "ya que dificultan la síntesis de voz natural. Utiliza un español latino neutro, pulido y profesional. "
     "REGLA DE ORO PARA PLAZOS: Si el usuario NO menciona explícitamente un límite de tiempo (como 'para mañana', 'el viernes', 'el 20 de julio'), "
     "debes colocar obligatoriamente 'None' en el campo de fecha. Queda terminantemente PROHIBIDO inventar o asumir plazos para el mismo día o el día siguiente."
 )
@@ -258,7 +262,7 @@ def enviar_reporte_y_diagnostico_colu():
     requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", json={"chat_id": ADMIN_TELEGRAM_ID, "text": diagnostico_msg, "parse_mode": "Markdown"})
     return "Diagnóstico y reportes completados con éxito."
 
-# --- RESPUESTAS DE VOZ NEURALES MASCULINAS (MICROSOFT EDGE TTS) ---
+# --- RESPUESTAS DE VOZ CON ELEVENLABS (ULTRA-REALISTA) ---
 def enviar_respuesta_de_voz(chat_id, texto_respuesta, reply_to_message_id):
     # 1. Filtro inteligente de Notion para evitar que lea códigos técnicos
     if texto_respuesta.startswith("NOTION|"):
@@ -271,7 +275,7 @@ def enviar_respuesta_de_voz(chat_id, texto_respuesta, reply_to_message_id):
         except:
             texto_limpio = "Perfecto. Ya registré la tarea en el sistema."
     else:
-        # 2. Limpieza estricta de caracteres
+        # 2. Limpieza estricta de caracteres especiales para optimizar caracteres
         texto_limpio = (
             texto_respuesta
             .replace("*", "")
@@ -286,14 +290,14 @@ def enviar_respuesta_de_voz(chat_id, texto_respuesta, reply_to_message_id):
             .replace("✅", "")
             .strip()
         )
-
-        # Remoción de saludos redundantes de arranque
+        
+        # Eliminamos saludos redundantes de arranque
         saludos_a_quitar = [
             "hola emi", "hola santiago", "hola santi", "hola renzo", "hola delfi", "hola ari",
             "hola, emi", "hola, santi", "hola, renzo", "hola, delfi", "hola, ari",
             "buen día emi", "buen día, emi", "buen dia", "hola", "buenos días", "buenos dias"
         ]
-
+        
         texto_minuscula = texto_limpio.lower()
         for saludo in saludos_a_quitar:
             if texto_minuscula.startswith(saludo):
@@ -301,38 +305,37 @@ def enviar_respuesta_de_voz(chat_id, texto_respuesta, reply_to_message_id):
                 if texto_limpio.startswith(",") or texto_limpio.startswith("."):
                     texto_limpio = texto_limpio[1:].strip()
                 break
-
+        
         if texto_limpio.lower() == "none" or not texto_limpio:
             texto_limpio = "Sistemas en línea."
 
-    # 3. Función interna para correr la tarea asíncrona de Edge TTS en un hilo separado de Telebot
-    async def generar_audio_neural(texto):
-        audio_memoria = BytesIO()
-        # VOCES RECOMENDADAS:
-        # - 'es-AR-TomasNeural' (Voz masculina con tono argentino, súper natural)
-        # - 'es-MX-JorgeNeural' (Voz masculina con tono mexicano, excelente dicción ejecutiva)
-        voz_seleccionada = "es-AR-TomasNeural" 
-
-        communicate = edge_tts.Communicate(text=texto, voice=voz_seleccionada)
-        async for chunk in communicate.stream():
-            if chunk["type"] == "audio":
-                audio_memoria.write(chunk["data"])
-        audio_memoria.seek(0)
-        return audio_memoria
+    # 3. Llamada directa a ElevenLabs (Modelo 'eleven_flash_v2_5' que consume poquísimo y es súper veloz)
+    url_eleven = "https://api.elevenlabs.io/v1/text-to-speech/pNInz6obpg7AN65J67rW" # ID de voz masculina ('Adam')
+    headers = {
+        "xi-api-key": ELEVENLABS_API_KEY,
+        "Content-Type": "application/json"
+    }
+    data = {
+        "text": texto_limpio,
+        "model_id": "eleven_flash_v2_5",
+        "voice_settings": {
+            "stability": 0.5,
+            "similarity_boost": 0.75
+        }
+    }
 
     try:
-        # Corremos el loop asíncrono de forma segura dentro del flujo síncrono de Telebot
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        audio_resultado = loop.run_until_complete(generar_audio_neural(texto_limpio))
-        loop.close()
-
-        # Enviamos la nota de voz nativa con el audio de alta calidad
-        bot.send_voice(chat_id=chat_id, voice=audio_resultado, reply_to_message_id=reply_to_message_id)
-
+        response = requests.post(url_eleven, json=data, headers=headers)
+        if response.status_code == 200:
+            audio_memoria = BytesIO(response.content)
+            audio_memoria.seek(0)
+            bot.send_voice(chat_id=chat_id, voice=audio_memoria, reply_to_message_id=reply_to_message_id)
+        else:
+            print(f"Error ElevenLabs: {response.status_code} - {response.text}")
+            # Caída de respaldo segura a mensaje de texto si se agota la cuota gratuita
+            bot.send_message(chat_id, texto_respuesta, reply_to_message_id=reply_to_message_id)
     except Exception as e:
-        print(f"Fallo de Edge-TTS: {e}")
-        # Caída de respaldo
+        print(f"Error enviando voz ElevenLabs: {e}")
         bot.send_message(chat_id, texto_respuesta, reply_to_message_id=reply_to_message_id)
 
 # --- CONEXIONES CON GEMINI CON CONTEXTO DE INTEGRANTE ---
