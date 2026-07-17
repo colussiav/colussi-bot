@@ -257,16 +257,16 @@ def enviar_reporte_y_diagnostico_colu():
     requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", json={"chat_id": ADMIN_TELEGRAM_ID, "text": diagnostico_msg, "parse_mode": "Markdown"})
     return "Diagnóstico y reportes completados con éxito."
 
-# --- RESPUESTAS DE VOZ REALES (NATIVAS DE TELEGRAM) ---
+# --- RESPUESTAS DE VOZ REALES (NATIVAS DE TELEGRAM - OPTIMIZADAS) ---
 def enviar_respuesta_de_voz(chat_id, texto_respuesta, reply_to_message_id):
-    # Limpiamos formatos de texto Markdown antes de leerlos para evitar que el TTS diga "asterisco"
-    texto_limpio = texto_respuesta.replace("*", "").replace("_", "").replace("`", "")[:350]
+    # Limpiamos formatos de texto Markdown y caracteres extraños
+    texto_limpio = texto_respuesta.replace("*", "").replace("_", "").replace("`", "").replace("▪️", "").replace("🔹", "")[:350]
     
     try:
-        # Usamos gTTS para generar el audio en español de Latinoamérica (es-us o es-es)
-        # Se genera directo en memoria usando BytesIO para evitar escribir archivos temporales en disco
         audio_memoria = BytesIO()
-        tts = gTTS(text=texto_limpio, lang='es', tld='com') # tld='com' asegura tonada latina neutra
+        # Configuramos 'lang=es' y 'tld=com.mx' para obtener el acento mexicano/latino que es mucho más fluido.
+        # Nos aseguramos de que 'slow=False' para que hable a velocidad normal y natural.
+        tts = gTTS(text=texto_limpio, lang='es', tld='com.mx', slow=False)
         tts.write_to_fp(audio_memoria)
         audio_memoria.seek(0)
         
@@ -275,9 +275,9 @@ def enviar_respuesta_de_voz(chat_id, texto_respuesta, reply_to_message_id):
         
     except Exception as e:
         print(f"Fallo de gTTS/SendVoice: {e}")
-        # Caída de respaldo: si falla la generación del audio, manda el texto normal de forma segura
+        # Caída de respaldo
         bot.send_message(chat_id, texto_respuesta, reply_to_message_id=reply_to_message_id)
-
+        
 # --- CONEXIONES CON GEMINI CON CONTEXTO DE INTEGRANTE ---
 def consultar_gemini(prompt_usuario, nombre_emisor):
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent?key={GEMINI_API_KEY}"
