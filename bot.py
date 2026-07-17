@@ -262,7 +262,7 @@ def enviar_reporte_y_diagnostico_colu():
     requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", json={"chat_id": ADMIN_TELEGRAM_ID, "text": diagnostico_msg, "parse_mode": "Markdown"})
     return "Diagnóstico y reportes completados con éxito."
 
-# --- RESPUESTAS DE VOZ CON ELEVENLABS (ULTRA-REALISTA) ---
+# --- RESPUESTAS DE VOZ CON ELEVENLABS (MÉTODO HTTP DIRECTO - SIN DEPENDENCIAS) ---
 def enviar_respuesta_de_voz(chat_id, texto_respuesta, reply_to_message_id):
     # 1. Filtro inteligente de Notion para evitar que lea códigos técnicos
     if texto_respuesta.startswith("NOTION|"):
@@ -275,7 +275,7 @@ def enviar_respuesta_de_voz(chat_id, texto_respuesta, reply_to_message_id):
         except:
             texto_limpio = "Perfecto. Ya registré la tarea en el sistema."
     else:
-        # 2. Limpieza estricta de caracteres especiales para optimizar caracteres
+        # 2. Limpieza estricta de caracteres especiales
         texto_limpio = (
             texto_respuesta
             .replace("*", "")
@@ -309,8 +309,8 @@ def enviar_respuesta_de_voz(chat_id, texto_respuesta, reply_to_message_id):
         if texto_limpio.lower() == "none" or not texto_limpio:
             texto_limpio = "Sistemas en línea."
 
-    # 3. Llamada directa a ElevenLabs (Modelo 'eleven_flash_v2_5' que consume poquísimo y es súper veloz)
-    url_eleven = "https://api.elevenlabs.io/v1/text-to-speech/pNInz6obpg7AN65J67rW" # ID de voz masculina ('Adam')
+    # 3. Solicitud directa HTTP a ElevenLabs (Voz de Adam y modelo ultrarrápido Flash)
+    url_eleven = "https://api.elevenlabs.io/v1/text-to-speech/pNInz6obpg7AN65J67rW"
     headers = {
         "xi-api-key": ELEVENLABS_API_KEY,
         "Content-Type": "application/json"
@@ -332,7 +332,6 @@ def enviar_respuesta_de_voz(chat_id, texto_respuesta, reply_to_message_id):
             bot.send_voice(chat_id=chat_id, voice=audio_memoria, reply_to_message_id=reply_to_message_id)
         else:
             print(f"Error ElevenLabs: {response.status_code} - {response.text}")
-            # Caída de respaldo segura a mensaje de texto si se agota la cuota gratuita
             bot.send_message(chat_id, texto_respuesta, reply_to_message_id=reply_to_message_id)
     except Exception as e:
         print(f"Error enviando voz ElevenLabs: {e}")
@@ -401,7 +400,7 @@ def consultar_gemini_con_audio(audio_bytes, nombre_emisor):
                             "Si en el audio pide registrar una tarea, responde estrictamente con este formato:\n"
                             "NOTION|Titulo de la tarea|PersonaAsignada|YYYY-MM-DD|Prioridad\n"
                             "Recuerda que PersonaAsignada debe ser: Emi, Delfi, Renzo, Santi o Ari.\n"
-                            "Si no se solicita registrar una tarea en Notion, responde conversacionalmente hablándole directamente por su nombre de pila."
+                            "Si no se solicita registrar una tarea en Notion, responde conversacionalmente hablándele directamente por su nombre de pila."
                         )
                     }
                 ]
