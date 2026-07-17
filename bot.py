@@ -39,10 +39,10 @@ except Exception as e:
 # --- INSTRUCCIÓN GENERAL PARA COLU ---
 SYSTEM_INSTRUCTION = (
     "Eres 'COLU', el asistente virtual de inteligencia artificial oficial de 'Colussi Audiovisuales'. "
-    "Tu tono es profesional, cercano, sofisticado y muy eficiente. Te diriges a los integrantes por su nombre de pila. "
+    "Tu tono es profesional, cercano, sofisticado y muy eficiente. "
     "Conoces a la perfección el rubro audiovisual (cámaras, iluminación, postproducción, flujos de trabajo, setups de cámaras DSLR/Mirrorless y de cine). "
-    "Tu misión es facilitarle la vida a Emi, Delfi, Renzo, Santi y Ari. Sé proactivo, asiste en brainstorming creativo y técnico, "
-    "y mantén la gestión del estudio impecable. "
+    "Tu misión es facilitarle la vida a Emi, Delfi, Renzo, Santi y Ari. Sé proactivo y mantén la gestión del estudio impecable. "
+    "REGLA DE CONVERSACIÓN DE VOZ: Está terminantemente PROHIBIDO iniciar tus respuestas con un saludo repetitivo como 'Hola', 'Buen día' o mencionar el nombre de la persona al principio de cada mensaje (por ejemplo, evita empezar con 'Hola Emi,' o 'Hola Santi,'). Ve directo al grano, responde de forma fluida y natural para que la nota de voz sea dinámica y no repetitiva. "
     "REGLA DE ORO PARA PLAZOS: Si el usuario NO menciona explícitamente un límite de tiempo (como 'para mañana', 'el viernes', 'el 20 de julio'), "
     "debes colocar obligatoriamente 'None' en el campo de fecha. Queda terminantemente PROHIBIDO inventar o asumir plazos para el mismo día o el día siguiente."
 )
@@ -257,27 +257,72 @@ def enviar_reporte_y_diagnostico_colu():
     requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", json={"chat_id": ADMIN_TELEGRAM_ID, "text": diagnostico_msg, "parse_mode": "Markdown"})
     return "Diagnóstico y reportes completados con éxito."
 
-# --- RESPUESTAS DE VOZ REALES (NATIVAS DE TELEGRAM - OPTIMIZADAS) ---
+# --- RESPUESTAS DE VOZ REALES (NATIVAS DE TELEGRAM - FLUIDAS Y SIN SALUDOS REPETITIVOS) ---
 def enviar_respuesta_de_voz(chat_id, texto_respuesta, reply_to_message_id):
-    # Limpiamos formatos de texto Markdown y caracteres extraños
-    texto_limpio = texto_respuesta.replace("*", "").replace("_", "").replace("`", "").replace("▪️", "").replace("🔹", "")[:350]
+    texto_limpio = ""
     
+    # 1. Si la respuesta contiene la sintaxis técnica de Notion, la traducimos a lenguaje humano fluido
+    if texto_respuesta.startswith("NOTION|"):
+        try:
+            partes = texto_respuesta.split("|")
+            tarea = partes[1]
+            persona = partes[2]
+            persona_hablada = "mí" if persona == "Emi" else persona
+            texto_limpio = f"He registrado la tarea para {persona_hablada}: {tarea}."
+        except:
+            texto_limpio = "Ya registré la tarea en el sistema."
+    else:
+        # 2. Si es una respuesta conversacional, removemos de raíz saludos iniciales molestos
+        texto_limpio = (
+            texto_respuesta
+            .replace("*", "")
+            .replace("_", "")
+            .replace("`", "")
+            .replace("|", " ")
+            .replace("-", " ")
+            .replace("▪️", "")
+            .replace("🔹", "")
+            .replace("⚠️", "")
+            .replace("🚨", "")
+            .replace("✅", "")
+            .strip()
+        )
+        
+        # Eliminar saludos repetitivos de arranque si aparecen al principio del texto
+        saludos_a_quitar = [
+            "hola emi", "hola santiago", "hola santi", "hola renzo", "hola delfi", "hola ari",
+            "hola, emi", "hola, santi", "hola, renzo", "hola, delfi", "hola, ari",
+            "buen día emi", "buen día, emi", "buen dia", "hola", "buenos días", "buenos dias"
+        ]
+        
+        texto_minuscula = texto_limpio.lower()
+        for saludo in saludos_a_quitar:
+            if texto_minuscula.startswith(saludo):
+                # Recorta el saludo y remueve comas, puntos o espacios restantes
+                texto_limpio = texto_limpio[len(saludo):].strip()
+                if texto_limpio.startswith(",") or texto_limpio.startswith("."):
+                    texto_limpio = texto_limpio[1:].strip()
+                break # Sale del bucle para no recortar palabras de más
+        
+        # Si quedó en "None" o vacío, ponemos frase de respaldo
+        if texto_limpio.lower() == "none" or not texto_limpio:
+            texto_limpio = "Sistemas en línea."
+
     try:
         audio_memoria = BytesIO()
-        # Configuramos 'lang=es' y 'tld=com.mx' para obtener el acento mexicano/latino que es mucho más fluido.
-        # Nos aseguramos de que 'slow=False' para que hable a velocidad normal y natural.
+        # Generamos la voz con la tonada fluida de 'com.mx' (México/Latam) y velocidad normal
         tts = gTTS(text=texto_limpio, lang='es', tld='com.mx', slow=False)
         tts.write_to_fp(audio_memoria)
         audio_memoria.seek(0)
         
-        # Le enviamos el audio como un "Voice Note" real (con forma de onda) usando la API de Telebot
+        # Enviamos la nota de voz nativa
         bot.send_voice(chat_id=chat_id, voice=audio_memoria, reply_to_message_id=reply_to_message_id)
         
     except Exception as e:
-        print(f"Fallo de gTTS/SendVoice: {e}")
+        print(f"Fallo de gTTS: {e}")
         # Caída de respaldo
         bot.send_message(chat_id, texto_respuesta, reply_to_message_id=reply_to_message_id)
-        
+
 # --- CONEXIONES CON GEMINI CON CONTEXTO DE INTEGRANTE ---
 def consultar_gemini(prompt_usuario, nombre_emisor):
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent?key={GEMINI_API_KEY}"
@@ -455,7 +500,7 @@ def handle_voice_message(message):
             
             if agregar_tarea_notion_completa(tarea, persona, plazo, prioridad):
                 enviar_alerta_telegram(persona, tarea, plazo, prioridad)
-                enviar_respuesta_de_voz(message.chat.id, f"Entendido. He registrado la tarea '{tarea}' asignada a {persona} en Notion.", message.message_id)
+                enviar_respuesta_de_voz(message.chat.id, f"He registrado la tarea '{tarea}' asignada a {persona} en Notion.", message.message_id)
         else:
             # Respuesta conversacional/técnica por voz
             enviar_respuesta_de_voz(message.chat.id, respuesta_ai, message.message_id)
