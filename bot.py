@@ -7,7 +7,8 @@ from datetime import timedelta
 import base64
 from http.server import BaseHTTPRequestHandler, HTTPServer
 import threading
-from urllib.parse import quote
+from io import BytesIO
+from gtts import gTTS
 
 # Credenciales de Render
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
@@ -256,18 +257,25 @@ def enviar_reporte_y_diagnostico_colu():
     requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", json={"chat_id": ADMIN_TELEGRAM_ID, "text": diagnostico_msg, "parse_mode": "Markdown"})
     return "Diagnóstico y reportes completados con éxito."
 
-# --- RESPUESTAS DE VOZ (SÍNTESIS DE AUDIO) ---
+# --- RESPUESTAS DE VOZ REALES (NATIVAS DE TELEGRAM) ---
 def enviar_respuesta_de_voz(chat_id, texto_respuesta, reply_to_message_id):
+    # Limpiamos formatos de texto Markdown antes de leerlos para evitar que el TTS diga "asterisco"
     texto_limpio = texto_respuesta.replace("*", "").replace("_", "").replace("`", "")[:350]
-    texto_codificado = quote(texto_limpio)
-    tts_url = f"https://translate.google.com/translate_tts?ie=UTF-8&q={texto_codificado}&tl=es&client=tw-ob"
     
-    url_telegram = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendVoice"
-    data = {"chat_id": chat_id, "voice": tts_url, "reply_to_message_id": reply_to_message_id}
     try:
-        requests.post(url_telegram, json=data)
+        # Usamos gTTS para generar el audio en español de Latinoamérica (es-us o es-es)
+        # Se genera directo en memoria usando BytesIO para evitar escribir archivos temporales en disco
+        audio_memoria = BytesIO()
+        tts = gTTS(text=texto_limpio, lang='es', tld='com') # tld='com' asegura tonada latina neutra
+        tts.write_to_fp(audio_memoria)
+        audio_memoria.seek(0)
+        
+        # Le enviamos el audio como un "Voice Note" real (con forma de onda) usando la API de Telebot
+        bot.send_voice(chat_id=chat_id, voice=audio_memoria, reply_to_message_id=reply_to_message_id)
+        
     except Exception as e:
-        print(f"Error enviando audio: {e}")
+        print(f"Fallo de gTTS/SendVoice: {e}")
+        # Caída de respaldo: si falla la generación del audio, manda el texto normal de forma segura
         bot.send_message(chat_id, texto_respuesta, reply_to_message_id=reply_to_message_id)
 
 # --- CONEXIONES CON GEMINI CON CONTEXTO DE INTEGRANTE ---
