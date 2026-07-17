@@ -67,7 +67,7 @@ def agregar_tarea_notion_completa(nombre_tarea, persona, fecha_plazo=None, prior
         "Nombre de la tarea": {"title": [{"text": {"content": nombre_tarea}}]},
         "Asignado": {"select": {"name": persona}},
         "Estado": {"status": {"name": "Sin empezar"}},
-        "Prioridad": {"select": {"name": prioridad}}
+        "Prioridad": {"select": {"name": priority}}
     }
     
     if fecha_plazo:
@@ -209,7 +209,7 @@ def enviar_alerta_telegram(persona, nombre_tarea, fecha_plazo=None, prioridad="M
     except:
         return False
 
-# --- DIAGNÓSTICO MATUTINO ENVIADO POR EL CRON-JOB ---
+# --- DIAGNÓSTICO MATUTINO ---
 def enviar_reporte_y_diagnostico_colu():
     print("Ejecutando diagnóstico proactivo de COLU...")
     pendientes = obtener_pendientes_notion()
@@ -258,7 +258,7 @@ def enviar_reporte_y_diagnostico_colu():
     requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", json={"chat_id": ADMIN_TELEGRAM_ID, "text": diagnostico_msg, "parse_mode": "Markdown"})
     return "Diagnóstico y reportes completados con éxito."
 
-# --- RESPUESTAS DE VOZ ELEVENLABS NATIIVAS POR HTTP ---
+# --- RESPUESTAS DE VOZ ELEVENLABS ---
 def enviar_respuesta_de_voz(chat_id, texto_respuesta, reply_to_message_id):
     if texto_respuesta.startswith("NOTION|"):
         try:
@@ -364,7 +364,7 @@ def consultar_gemini(prompt_usuario, nombre_emisor):
         print(f"Error consultando Gemini: {e}")
     return "Disculpe, Señor. Tuve una pequeña falla en mi núcleo de comunicación."
 
-# --- PROCESAMIENTO DE AUDIO MEJORADO (STT DE ALTA FIDELIDAD CON GEMINI) ---
+# --- PROCESAMIENTO DE AUDIO MEJORADO (STT) ---
 def transcribir_audio_con_gemini(audio_bytes):
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent?key={GEMINI_API_KEY}"
     headers = {"Content-Type": "application/json"}
@@ -390,6 +390,64 @@ def transcribir_audio_con_gemini(audio_bytes):
         print(f"Error en STT: {e}")
     return None
 
+# --- EVALUADOR CENTRAL DE COMANDOS INTERNOS DE NOTION (EVITA ALUCINACIONES) ---
+def ejecutar_comando_notion(texto, persona_remitente, message, usar_audio=False):
+    texto_lower = texto.lower().strip()
+    
+    # 1. Filtro unificado de Reporte General
+    if any(x in texto_lower for x in ["reporte", "reporte general", "como venimos", "todas las tareas", "tareas tiene el equipo", "tareas de todo el equipo"]):
+        if persona_remitente not in ["Emi", "Delfi"]:
+            msg = "Lo lamento, no cuentas con los permisos de acceso requeridos."
+            if usar_audio: enviar_respuesta_de_voz(message.chat.id, msg, message.message_id)
+            else: bot.reply_to(message, msg)
+            return True
+            
+        pendientes = obtener_pendientes_notion()
+        if not pendientes:
+            msg = f"Excelente {persona_remitente}. No hay tareas pendientes en toda la productora."
+            if usar_audio: enviar_respuesta_de_voz(message.chat.id, msg, message.message_id)
+            else: bot.reply_to(message, msg)
+            return True
+            
+        mensaje = "📋 *Estado General de Producción - Colussi AV:*\n\n"
+        for pers, bloques in pendientes.items():
+            mensaje += f"👤 *{pers}:*\n"
+            if bloques["en_progreso"]:
+                mensaje += "  ⏳ *En progreso:*\n" + "\n".join([f"    🔹 {t}" for t in bloques["en_progreso"]]) + "\n"
+            if bloques["sin_empezar"]:
+                mensaje += "  💤 *Sin empezar:*\n" + "\n".join([f"    🔹 {t}" for t in bloques["sin_empezar"]]) + "\n"
+            mensaje += "\n"
+            
+        if usar_audio: enviar_respuesta_de_voz(message.chat.id, mensaje, message.message_id)
+        else: bot.reply_to(message, mensaje, parse_mode="Markdown")
+        return True
+
+    # 2. Filtro unificado de Tareas Individuales
+    if any(x in texto_lower for x in ["mis tareas", "que tengo que hacer", "que tareas tengo"]):
+        pendientes = obtener_pendientes_notion()
+        bloques = pendientes.get(persona_remitente)
+        if not bloques or (not bloques["sin_empezar"] and not bloques["en_progreso"]):
+            msg = f"Estás al día, {persona_remitente}. Excelente labor."
+            if usar_audio: enviar_respuesta_de_voz(message.chat.id, msg, message.message_id)
+            else: bot.reply_to(message, msg)
+            return True
+            
+        mensaje = f"📝 *Tareas pendientes para {persona_remitente}:*\n\n"
+        if bloques["en_progreso"]:
+            mensaje += "⏳ *EN PROGRESO:*\n" + "\n".join([f"  🔹 {t}" for t in bloques["en_progreso"]]) + "\n\n"
+        if bloques["sin_empezar"]:
+            mensaje += "💤 *SIN EMPEZAR:*\n" + "\n".join([f"  🔹 {t}" for t in bloques["sin_empezar"]]) + "\n\n"
+            
+        if usar_audio: enviar_respuesta_de_voz(message.chat.id, mensaje, message.message_id)
+        else: bot.reply_to(message, mensaje, parse_mode="Markdown")
+        return True
+
+    # 3. Filtro de cambio de estados
+    if procesar_cambio_estado(texto_lower, persona_remitente, message, usar_audio=usar_audio):
+        return True
+
+    return False
+
 # --- RECEPTOR DE NOTAS DE VOZ ---
 @bot.message_handler(content_types=['voice'])
 def handle_voice_message(message):
@@ -403,7 +461,7 @@ def handle_voice_message(message):
         file_info = bot.get_file(message.voice.file_id)
         downloaded = bot.download_file(file_info.file_path)
         
-        # 1. Transcribimos primero el audio a texto limpio
+        # Transcribimos primero el audio a texto limpio
         texto_transcrito = transcribir_audio_con_gemini(downloaded)
         if not texto_transcrito:
             enviar_respuesta_de_voz(message.chat.id, "Disculpe. No pude comprender correctamente el mensaje de audio.", message.message_id)
@@ -411,11 +469,11 @@ def handle_voice_message(message):
             
         print(f"Audio de {persona_remitente} traducido a texto: '{texto_transcrito}'")
         
-        # 2. Procesar cambio de estado de Notion con el texto perfecto
-        if procesar_cambio_estado(texto_transcrito.lower().strip(), persona_remitente, message, usar_audio=True):
+        # Redirigir el texto transcrito por el evaluador central para evitar alucinaciones
+        if ejecutar_comando_notion(texto_transcrito, persona_remitente, message, usar_audio=True):
             return
             
-        # 3. Consultar a Gemini qué acción tomar
+        # Consultar a Gemini qué acción tomar si es una consulta normal o asignación
         respuesta_ai = consultar_gemini(texto_transcrito, persona_remitente)
         
         if respuesta_ai.startswith("NOTION|"):
@@ -446,42 +504,11 @@ def handle_message(message):
 
     texto = message.text.lower().strip()
     
-    if any(x in texto for x in ["reporte", "reporte general", "como venimos", "todas las tareas"]):
-        if persona_remitente not in ["Emi", "Delfi"]:
-            bot.reply_to(message, "Lo lamento, no cuentas con los permisos de acceso requeridos.")
-            return
-        pendientes = obtener_pendientes_notion()
-        if not pendientes:
-            bot.reply_to(message, "Excelente. No hay tareas pendientes en toda la productora.")
-            return
-        mensaje = "📋 *Estado General de Producción - Colussi AV:*\n\n"
-        for pers, bloques in pendientes.items():
-            mensaje += f"👤 *{pers}:*\n"
-            if bloques["en_progreso"]:
-                mensaje += "  ⏳ *En progreso:*\n" + "\n".join([f"    🔹 {t}" for t in bloques["en_progreso"]]) + "\n"
-            if bloques["sin_empezar"]:
-                mensaje += "  💤 *Sin empezar:*\n" + "\n".join([f"    🔹 {t}" for t in bloques["sin_empezar"]]) + "\n"
-            mensaje += "\n"
-        bot.reply_to(message, mensaje, parse_mode="Markdown")
+    # Procesar comandos por el evaluador central
+    if ejecutar_comando_notion(texto, persona_remitente, message, usar_audio=False):
         return
 
-    if any(x in texto for x in ["mis tareas", "que tengo que hacer", "que tareas tengo"]):
-        pendientes = obtener_pendientes_notion()
-        bloques = pendientes.get(persona_remitente)
-        if not bloques or (not bloques["sin_empezar"] and not bloques["en_progreso"]):
-            bot.reply_to(message, f"Estás al día, {persona_remitente}. Excelente labor.")
-            return
-        mensaje = f"📝 *Tareas pendientes para {persona_remitente}:*\n\n"
-        if bloques["en_progreso"]:
-            mensaje += "⏳ *EN PROGRESO:*\n" + "\n".join([f"  🔹 {t}" for t in bloques["en_progreso"]]) + "\n\n"
-        if bloques["sin_empezar"]:
-            mensaje += "💤 *SIN EMPEZAR:*\n" + "\n".join([f"  🔹 {t}" for t in bloques["sin_empezar"]]) + "\n\n"
-        bot.reply_to(message, mensaje, parse_mode="Markdown")
-        return
-
-    if procesar_cambio_estado(texto, persona_remitente, message, usar_audio=False):
-        return
-
+    # Restricción de creación general
     if persona_remitente not in ["Emi", "Delfi"]:
         bot.reply_to(message, "Acceso de administración denegado. Solo Emiliano y Delfi pueden reescribir la base de datos.")
         return
@@ -515,10 +542,8 @@ def procesar_cambio_estado(texto, persona_remitente, message, usar_audio=False):
     
     if not candidatas:
         msg = f"No encontré ninguna tarea activa en Notion asignada a vos que coincida con '{filtro}'."
-        if usar_audio:
-            enviar_respuesta_de_voz(message.chat.id, msg, message.message_id)
-        else:
-            bot.reply_to(message, msg)
+        if usar_audio: enviar_respuesta_de_voz(message.chat.id, msg, message.message_id)
+        else: bot.reply_to(message, msg)
         return True
         
     if len(candidatas) > 1:
@@ -534,14 +559,12 @@ def procesar_cambio_estado(texto, persona_remitente, message, usar_audio=False):
     
     if aplicar_estado_por_id(id_tarea, nuevo_estado):
         msg = f"Perfecto {persona_remitente}. He actualizado la tarea '{titulo_tarea}' a '{nuevo_estado}'."
-        if usar_audio:
-            enviar_respuesta_de_voz(message.chat.id, msg, message.message_id)
-        else:
-            bot.reply_to(message, msg)
+        if usar_audio: enviar_respuesta_de_voz(message.chat.id, msg, message.message_id)
+        else: bot.reply_to(message, msg)
         notificar_cambio_a_emiliano(persona_remitente, titulo_tarea, nuevo_estado)
     return True
 
-# --- SERVIDOR WEB INTEGRADO ADAPTADO PARA LAS 10:00 AM ---
+# --- SERVIDOR WEB: ADAPTADO PARA LAS 10:00 AM ---
 class WebhookHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path in ["/", ""]:
@@ -558,7 +581,6 @@ class WebhookHandler(BaseHTTPRequestHandler):
             hora_actual = hora_arg.hour
             minutos_actuales = hora_arg.minute
             
-            # Evaluamos que la hora de Argentina sea exactamente las 10:00 AM (Damos margen de 15 minutos)
             if hora_actual == 10 and minutos_actuales < 16:
                 resultado = enviar_reporte_y_diagnostico_colu()
                 self.wfile.write(f"Reporte diario ejecutado a las 10 AM: {resultado}".encode("utf-8"))
