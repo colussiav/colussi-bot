@@ -8,7 +8,8 @@ import base64
 from http.server import BaseHTTPRequestHandler, HTTPServer
 import threading
 from io import BytesIO
-from gtts import gTTS
+import asyncio
+import edge_tts
 
 # Credenciales de Render
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
@@ -257,22 +258,20 @@ def enviar_reporte_y_diagnostico_colu():
     requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", json={"chat_id": ADMIN_TELEGRAM_ID, "text": diagnostico_msg, "parse_mode": "Markdown"})
     return "Diagnóstico y reportes completados con éxito."
 
-# --- RESPUESTAS DE VOZ REALES (NATIVAS DE TELEGRAM - FLUIDAS Y SIN SALUDOS REPETITIVOS) ---
+# --- RESPUESTAS DE VOZ NEURALES MASCULINAS (MICROSOFT EDGE TTS) ---
 def enviar_respuesta_de_voz(chat_id, texto_respuesta, reply_to_message_id):
-    texto_limpio = ""
-    
-    # 1. Si la respuesta contiene la sintaxis técnica de Notion, la traducimos a lenguaje humano fluido
+    # 1. Filtro inteligente de Notion para evitar que lea códigos técnicos
     if texto_respuesta.startswith("NOTION|"):
         try:
             partes = texto_respuesta.split("|")
             tarea = partes[1]
             persona = partes[2]
             persona_hablada = "mí" if persona == "Emi" else persona
-            texto_limpio = f"He registrado la tarea para {persona_hablada}: {tarea}."
+            texto_limpio = f"Entendido, Señor. He registrado la tarea para {persona_hablada}: {tarea}."
         except:
-            texto_limpio = "Ya registré la tarea en el sistema."
+            texto_limpio = "Perfecto. Ya registré la tarea en el sistema."
     else:
-        # 2. Si es una respuesta conversacional, removemos de raíz saludos iniciales molestos
+        # 2. Limpieza estricta de caracteres
         texto_limpio = (
             texto_respuesta
             .replace("*", "")
@@ -287,39 +286,52 @@ def enviar_respuesta_de_voz(chat_id, texto_respuesta, reply_to_message_id):
             .replace("✅", "")
             .strip()
         )
-        
-        # Eliminar saludos repetitivos de arranque si aparecen al principio del texto
+
+        # Remoción de saludos redundantes de arranque
         saludos_a_quitar = [
             "hola emi", "hola santiago", "hola santi", "hola renzo", "hola delfi", "hola ari",
             "hola, emi", "hola, santi", "hola, renzo", "hola, delfi", "hola, ari",
             "buen día emi", "buen día, emi", "buen dia", "hola", "buenos días", "buenos dias"
         ]
-        
+
         texto_minuscula = texto_limpio.lower()
         for saludo in saludos_a_quitar:
             if texto_minuscula.startswith(saludo):
-                # Recorta el saludo y remueve comas, puntos o espacios restantes
                 texto_limpio = texto_limpio[len(saludo):].strip()
                 if texto_limpio.startswith(",") or texto_limpio.startswith("."):
                     texto_limpio = texto_limpio[1:].strip()
-                break # Sale del bucle para no recortar palabras de más
-        
-        # Si quedó en "None" o vacío, ponemos frase de respaldo
+                break
+
         if texto_limpio.lower() == "none" or not texto_limpio:
             texto_limpio = "Sistemas en línea."
 
-    try:
+    # 3. Función interna para correr la tarea asíncrona de Edge TTS en un hilo separado de Telebot
+    async def generar_audio_neural(texto):
         audio_memoria = BytesIO()
-        # Generamos la voz con la tonada fluida de 'com.mx' (México/Latam) y velocidad normal
-        tts = gTTS(text=texto_limpio, lang='es', tld='com.mx', slow=False)
-        tts.write_to_fp(audio_memoria)
+        # VOCES RECOMENDADAS:
+        # - 'es-AR-TomasNeural' (Voz masculina con tono argentino, súper natural)
+        # - 'es-MX-JorgeNeural' (Voz masculina con tono mexicano, excelente dicción ejecutiva)
+        voz_seleccionada = "es-AR-TomasNeural" 
+
+        communicate = edge_tts.Communicate(text=texto, voice=voz_seleccionada)
+        async for chunk in communicate.stream():
+            if chunk["type"] == "audio":
+                audio_memoria.write(chunk["data"])
         audio_memoria.seek(0)
-        
-        # Enviamos la nota de voz nativa
-        bot.send_voice(chat_id=chat_id, voice=audio_memoria, reply_to_message_id=reply_to_message_id)
-        
+        return audio_memoria
+
+    try:
+        # Corremos el loop asíncrono de forma segura dentro del flujo síncrono de Telebot
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        audio_resultado = loop.run_until_complete(generar_audio_neural(texto_limpio))
+        loop.close()
+
+        # Enviamos la nota de voz nativa con el audio de alta calidad
+        bot.send_voice(chat_id=chat_id, voice=audio_resultado, reply_to_message_id=reply_to_message_id)
+
     except Exception as e:
-        print(f"Fallo de gTTS: {e}")
+        print(f"Fallo de Edge-TTS: {e}")
         # Caída de respaldo
         bot.send_message(chat_id, texto_respuesta, reply_to_message_id=reply_to_message_id)
 
