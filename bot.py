@@ -303,7 +303,7 @@ def enviar_respuesta_de_voz(chat_id, texto_respuesta, reply_to_message_id):
         if texto_limpio.lower() == "none" or not texto_limpio:
             texto_limpio = "Sistemas en línea."
 
-    url_eleven = "https://api.elevenlabs.io/v1/text-to-speech/pNInz6obpg7AN65J67rW"
+    url_eleven = "https://api.elevenlabs.io/v1/text-to-speech/JBF2zCBZg9v6OUvV99uK"
     headers = {
         "xi-api-key": ELEVENLABS_API_KEY,
         "Content-Type": "application/json"
