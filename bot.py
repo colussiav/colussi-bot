@@ -7,6 +7,7 @@ from datetime import timedelta
 import base64
 from http.server import BaseHTTPRequestHandler, HTTPServer
 import threading
+from urllib.parse import quote
 
 # Credenciales de Render
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
@@ -23,9 +24,8 @@ TELEGRAM_IDS = {
     "Emi": os.environ.get("TELEGRAM_ID_EMI")
 }
 
-# Solo Emiliano recibe las alertas de avance en privado
+# Lee tu ID de administrador directamente desde la variable de Render
 ADMIN_TELEGRAM_ID = int(os.environ.get("TELEGRAM_ID_EMI")) if os.environ.get("TELEGRAM_ID_EMI") else 8802307065
-CALENDAR_ID = "colussi.av@gmail.com"
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 
@@ -35,18 +35,16 @@ except Exception as e:
     print(f"Error al obtener el nombre del bot: {e}")
     BOT_USERNAME = ""
 
+# --- INSTRUCCIÓN GENERAL PARA COLU ---
 SYSTEM_INSTRUCTION = (
-    "Eres el asistente virtual oficial de 'Colussi Audiovisuales', una productora audiovisual de Argentina. "
-    "Tu objetivo es ayudar a Emiliano (el dueño) y el resto del equipo (5 personas en total: Emi, Delfi, Renzo, Santi, Ari) "
-    "a organizarse, coordinar rodajes, redactar ideas y gestionar tareas cotidianas de forma prolija, amigable y muy profesional."
+    "Eres 'COLU', el asistente virtual de inteligencia artificial oficial de 'Colussi Audiovisuales'. "
+    "Tu tono es profesional, cercano, sofisticado y muy eficiente. Te diriges a los integrantes por su nombre de pila. "
+    "Conoces a la perfección el rubro audiovisual (cámaras, iluminación, postproducción, flujos de trabajo, setups de cámaras DSLR/Mirrorless y de cine). "
+    "Tu misión es facilitarle la vida a Emi, Delfi, Renzo, Santi y Ari. Sé proactivo, asiste en brainstorming creativo y técnico, "
+    "y mantén la gestión del estudio impecable. "
+    "REGLA DE ORO PARA PLAZOS: Si el usuario NO menciona explícitamente un límite de tiempo (como 'para mañana', 'el viernes', 'el 20 de julio'), "
+    "debes colocar obligatoriamente 'None' en el campo de fecha. Queda terminantemente PROHIBIDO inventar o asumir plazos para el mismo día o el día siguiente."
 )
-
-# --- GOOGLE CALENDAR (Standby) ---
-def obtener_servicio_calendar():
-    return None
-
-def agendar_evento_google(titulo, inicio_iso, fin_iso, descripcion=""):
-    return "La integración de Google Calendar requiere configurar una nueva clave privada segura en Render."
 
 # --- NOTION: AGREGAR TAREA ---
 def agregar_tarea_notion_completa(nombre_tarea, persona, fecha_plazo=None, prioridad="Medio"):
@@ -57,43 +55,28 @@ def agregar_tarea_notion_completa(nombre_tarea, persona, fecha_plazo=None, prior
         "Notion-Version": "2022-06-28"
     }
     
-    # REGLA 3: Si contiene la palabra "presupuesto", se marca automáticamente como Alto (urgente)
     if "presupuesto" in nombre_tarea.lower():
         prioridad = "Alto"
         
     properties = {
-        "Nombre de la tarea": {
-            "title": [{"text": {"content": nombre_tarea}}]
-        },
-        "Asignado": {
-            "select": {"name": persona}
-        },
-        "Estado": {
-            "status": {"name": "Sin empezar"}
-        },
-        "Prioridad": {
-            "select": {"name": prioridad}
-        }
+        "Nombre de la tarea": {"title": [{"text": {"content": nombre_tarea}}]},
+        "Asignado": {"select": {"name": persona}},
+        "Estado": {"status": {"name": "Sin empezar"}},
+        "Prioridad": {"select": {"name": prioridad}}
     }
     
     if fecha_plazo:
-        properties["Plazo"] = {
-            "date": {"start": fecha_plazo}
-        }
+        properties["Plazo"] = {"date": {"start": fecha_plazo}}
         
-    data = {
-        "parent": {"database_id": NOTION_DATABASE_ID},
-        "properties": properties
-    }
-    
+    data = {"parent": {"database_id": NOTION_DATABASE_ID}, "properties": properties}
     try:
         response = requests.post(url, json=data, headers=headers)
         return response.status_code == 200
     except Exception as e:
-        print(f"DEBUG NOTION - Error de conexión: {e}")
+        print(f"Error Notion: {e}")
         return False
 
-# --- NOTION: OBTENER PENDIENTES (Incluye Alertas de Presupuestos Vencidos) ---
+# --- NOTION: OBTENER PENDIENTES ---
 def obtener_pendientes_notion():
     url = f"https://api.notion.com/v1/databases/{NOTION_DATABASE_ID}/query"
     headers = {
@@ -101,7 +84,6 @@ def obtener_pendientes_notion():
         "Content-Type": "application/json",
         "Notion-Version": "2022-06-28"
     }
-    
     try:
         response = requests.post(url, headers=headers)
         if response.status_code != 200:
@@ -109,40 +91,29 @@ def obtener_pendientes_notion():
             
         resultados = response.json().get("results", [])
         pendientes_por_persona = {}
-        
-        # Fecha de ayer para calcular vencimiento de presupuestos (1 día de margen de demora)
         ayer = (datetime.datetime.utcnow() - timedelta(hours=3) - timedelta(days=1)).strftime('%Y-%m-%d')
         
         for pagina in resultados:
             propiedades = pagina.get("properties", {})
-            
-            estado_data = propiedades.get("Estado", {}).get("status")
-            estado = estado_data.get("name", "Sin empezar") if estado_data else "Sin empezar"
-            
+            estado = propiedades.get("Estado", {}).get("status", {}).get("name", "Sin empezar")
             if estado == "Listo":
                 continue
                 
             titulo_data = propiedades.get("Nombre de la tarea", {}).get("title", [])
             nombre_tarea = titulo_data[0].get("text", {}).get("content", "Tarea sin nombre") if titulo_data else "Tarea sin nombre"
+            persona = propiedades.get("Asignado", {}).get("select", {}).get("name")
+            plazo = propiedades.get("Plazo", {}).get("date", {}).get("start") if propiedades.get("Plazo", {}).get("date") else None
             
-            asignado_data = propiedades.get("Asignado", {}).get("select")
-            persona = asignado_data.get("name") if asignado_data else None
-            
-            plazo_data = propiedades.get("Plazo", {}).get("date")
-            plazo = plazo_data.get("start") if plazo_data else None
-            
-            # Alerta de presupuestos vencidos por más de 1 día
             es_presupuesto = "presupuesto" in nombre_tarea.lower()
             esta_vencido = es_presupuesto and plazo and (plazo <= ayer)
             
             nombre_con_alerta = nombre_tarea
             if esta_vencido:
-                nombre_con_alerta = f"⚠️ VENCIDO (Demorado): {nombre_tarea} [Plazo: {plazo}]"
+                nombre_con_alerta = f"⚠️ VENCIDO: {nombre_tarea} [Plazo: {plazo}]"
             
             if persona:
                 if persona not in pendientes_por_persona:
                     pendientes_por_persona[persona] = {"sin_empezar": [], "en_progreso": []}
-                    
                 if estado == "En progreso":
                     pendientes_por_persona[persona]["en_progreso"].append(nombre_con_alerta)
                 else:
@@ -150,7 +121,7 @@ def obtener_pendientes_notion():
                 
         return pendientes_por_persona
     except Exception as e:
-        print(f"Error en obtener_pendientes_notion: {e}")
+        print(f"Error Notion Query: {e}")
         return {}
 
 # --- NOTION: BUSCAR TAREAS COINCIDENTES ---
@@ -161,7 +132,6 @@ def buscar_tareas_candidatas(nombre_tarea_aproximado, persona_name):
         "Content-Type": "application/json",
         "Notion-Version": "2022-06-28"
     }
-    
     filter_data = {
         "filter": {
             "and": [
@@ -170,143 +140,138 @@ def buscar_tareas_candidatas(nombre_tarea_aproximado, persona_name):
             ]
         }
     }
-    
     try:
         response = requests.post(url, json=filter_data, headers=headers)
         if response.status_code != 200:
             return []
-            
         resultados = response.json().get("results", [])
         coincidencias = []
-        
         for pagina in resultados:
-            propiedades = pagina.get("properties", {})
-            titulo_data = propiedades.get("Nombre de la tarea", {}).get("title", [])
+            titulo_data = pagina.get("properties", {}).get("Nombre de la tarea", {}).get("title", [])
             titulo = titulo_data[0].get("text", {}).get("content", "") if titulo_data else ""
-            
             if nombre_tarea_aproximado.lower() in titulo.lower() or titulo.lower() in nombre_tarea_aproximado.lower():
                 coincidencias.append({"id": pagina.get("id"), "titulo": titulo})
-                
         return coincidencias
     except Exception as e:
-        print(f"Error buscando candidatas: {e}")
+        print(f"Error candidatas: {e}")
         return []
 
-# --- NOTION: APLICAR CAMBIO DE ESTADO DIRECTO ---
 def aplicar_estado_por_id(page_id, nuevo_estado):
     url = f"https://api.notion.com/v1/pages/{page_id}"
-    headers = {
-        "Authorization": f"Bearer {NOTION_API_KEY}",
-        "Content-Type": "application/json",
-        "Notion-Version": "2022-06-28"
-    }
-    update_data = {
-        "properties": {
-            "Estado": {
-                "status": {
-                    "name": nuevo_estado
-                }
-            }
-        }
-    }
+    headers = {"Authorization": f"Bearer {NOTION_API_KEY}", "Content-Type": "application/json", "Notion-Version": "2022-06-28"}
+    update_data = {"properties": {"Estado": {"status": {"name": nuevo_estado}}}}
     res = requests.patch(url, json=update_data, headers=headers)
     return res.status_code == 200
 
-# --- TELEGRAM: ENVIAR NOTIFICACIÓN DE PROGRESO A EMILIANO (FEEDBACK) ---
+# --- TELEGRAM: ENVIAR NOTIFICACIÓN DE PROGRESO (FEEDBACK) ---
 def notificar_cambio_a_emiliano(persona, tarea, nuevo_estado):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     emoji = "🚀" if nuevo_estado == "En progreso" else "🎉"
     mensaje = (
-        f"🔔 *Feedback de Equipo* {emoji}\n\n"
-        f"*{persona}* actualizó una tarea en Notion:\n"
+        f"🤖 *COLU - Reporte de Avance* {emoji}\n\n"
+        f"*{persona}* ha actualizado una tarea:\n"
         f"▪️ *Tarea:* '{tarea}'\n"
-        f"▪️ *Nuevo Estado:* {nuevo_estado}"
+        f"▪️ *Estado actual:* {nuevo_estado}\n\n"
+        f"Todo asentado en la base de datos."
     )
     data = {"chat_id": ADMIN_TELEGRAM_ID, "text": mensaje, "parse_mode": "Markdown"}
     try:
         requests.post(url, json=data)
-    except Exception as e:
-        print(f"Error al enviar feedback a Emiliano: {e}")
+    except:
+        pass
 
 # --- TELEGRAM: ENVIAR ALERTA INDIVIDUAL ---
 def enviar_alerta_telegram(persona, nombre_tarea, fecha_plazo=None, prioridad="Medio"):
     telegram_id = TELEGRAM_IDS.get(persona)
     if not telegram_id:
         return False
-        
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    
     if "presupuesto" in nombre_tarea.lower():
         prioridad = "Alto"
-        
     alerta_prioridad = "⚠️" if prioridad == "Alto" else "📌"
     
     mensaje = (
-        f"🔔 *¡Hola {persona}!* 🎬\n\n"
-        f"Te acaban de asignar una nueva tarea en Notion:\n"
+        f"🤖 *¡Hola {persona}!* 🎬\n\n"
+        f"COLU te reporta una nueva asignación en Notion:\n"
         f"{alerta_prioridad} *{nombre_tarea}*\n"
         f"▪️ *Prioridad:* {prioridad}\n"
     )
-    
     if fecha_plazo:
-        try:
-            partes_fecha = fecha_plazo.split("-")
-            fecha_bonita = f"{partes_fecha[2]}/{partes_fecha[1]}/{partes_fecha[0]}"
-            mensaje += f"📅 *Plazo de entrega:* {fecha_bonita}\n"
-        except:
-            mensaje += f"📅 *Plazo de entrega:* {fecha_plazo}\n"
-            
+        mensaje += f"📅 *Plazo de entrega:* {fecha_plazo}\n"
     data = {"chat_id": telegram_id, "text": mensaje, "parse_mode": "Markdown"}
     try:
         res = requests.post(url, json=data)
         return res.status_code == 200
-    except Exception as e:
-        print(f"DEBUG NOTIFICACION - Error: {e}")
+    except:
         return False
 
-# --- TELEGRAM: ENVIAR REPORTE MATUTINO ---
-def enviar_reporte_matutino():
-    print("Iniciando generación de reporte matutino...")
+# --- PROCESO: DIAGNÓSTICO PROACTIVO AUTOMÁTICO DE COLU ---
+def enviar_reporte_y_diagnostico_colu():
+    print("Ejecutando diagnóstico proactivo de COLU...")
     pendientes = obtener_pendientes_notion()
     
     if not pendientes:
         return "No hay tareas pendientes en la base de datos."
         
-    enviados = 0
+    # 1. Enviar el reporte matutino a los chicos
     for persona, bloques in pendientes.items():
         telegram_id = TELEGRAM_IDS.get(persona)
-        if telegram_id:
+        if telegram_id and persona != "Emi":
             sin_emp = bloques["sin_empezar"]
             en_prog = bloques["en_progreso"]
             
             if not sin_emp and not en_prog:
                 continue
                 
-            mensaje = f"☕ *¡Buen día, {persona}!* 🎬\n\nAcá tenés tus tareas pendientes de hoy en *Colussi AV*:\n\n"
-            
+            mensaje = f"☕ *¡Buen día, {persona}!* 🎬\n\nAquí tienes tu reporte de tareas para hoy:\n\n"
             if en_prog:
-                mensaje += "⏳ *EN PROGRESO (Seguimos trabajando en esto):*\n"
-                mensaje += "\n".join([f"  🔹 {t}" for t in en_prog]) + "\n\n"
-                
+                mensaje += "⏳ *EN PROGRESO:*\n" + "\n".join([f"  🔹 {t}" for t in en_prog]) + "\n\n"
             if sin_emp:
-                mensaje += "💤 *SIN EMPEZAR (Tareas nuevas en espera):*\n"
-                mensaje += "\n".join([f"  🔹 {t}" for t in sin_emp]) + "\n\n"
-                
-            mensaje += "¡Que tengas una excelente jornada de producción! 🚀"
+                mensaje += "💤 *SIN EMPEZAR:*\n" + "\n".join([f"  🔹 {t}" for t in sin_emp]) + "\n\n"
+            mensaje += "Que tengas una productiva jornada. COLU fuera. 🤖"
             
-            url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-            data = {"chat_id": telegram_id, "text": mensaje, "parse_mode": "Markdown"}
-            try:
-                res = requests.post(url, json=data)
-                if res.status_code == 200:
-                    enviados += 1
-            except Exception as e:
-                print(f"Error enviando reporte a {persona}: {e}")
-                
-    return f"Reportes enviados con éxito a {enviados} integrantes."
+            requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", json={"chat_id": telegram_id, "text": mensaje, "parse_mode": "Markdown"})
 
-# --- CONEXIÓN CON GEMINI (Texto normal) ---
-def consultar_gemini(prompt_usuario):
+    # 2. El Diagnóstico Proactivo consolidado para Emiliano
+    alertas = []
+    for persona, bloques in pendientes.items():
+        sin_emp = bloques["sin_empezar"]
+        en_prog = bloques["en_progreso"]
+        
+        presupuestos_demorados = [t for t in sin_emp + en_prog if "⚠️ VENCIDO" in t]
+        if presupuestos_demorados:
+            alertas.append(f"⚠️ *{persona}* tiene presupuestos demorados sin resolver:\n" + "\n".join([f"   - {p}" for p in presupuestos_demorados]))
+            
+        if len(sin_emp) > 4:
+            alertas.append(f"📦 *{persona}* tiene acumulación de tareas en espera ({len(sin_emp)} sin empezar). Podríamos tener un cuello de botella allí.")
+
+    diagnostico_msg = "🤖 *COLU - Diagnóstico Matutino de Producción* ☕\n\nBuenos días, Emiliano. He analizado el estado actual del estudio en Notion:\n\n"
+    if alertas:
+        diagnostico_msg += "🚨 *PUNTOS CRÍTICOS DETECTADOS:*\n\n" + "\n\n".join(alertas)
+    else:
+        diagnostico_msg += "✅ *Todo bajo control:* No detecté cuellos de botella significativos ni presupuestos demorados críticos hoy. El equipo avanza de forma fluida."
+        
+    diagnostico_msg += "\n\nQuedo a tu entera disposición para cualquier consulta creativa o técnica hoy."
+    
+    requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", json={"chat_id": ADMIN_TELEGRAM_ID, "text": diagnostico_msg, "parse_mode": "Markdown"})
+    return "Diagnóstico y reportes completados con éxito."
+
+# --- RESPUESTAS DE VOZ (SÍNTESIS DE AUDIO) ---
+def enviar_respuesta_de_voz(chat_id, texto_respuesta, reply_to_message_id):
+    texto_limpio = texto_respuesta.replace("*", "").replace("_", "").replace("`", "")[:350]
+    texto_codificado = quote(texto_limpio)
+    tts_url = f"https://translate.google.com/translate_tts?ie=UTF-8&q={texto_codificado}&tl=es&client=tw-ob"
+    
+    url_telegram = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendVoice"
+    data = {"chat_id": chat_id, "voice": tts_url, "reply_to_message_id": reply_to_message_id}
+    try:
+        requests.post(url_telegram, json=data)
+    except Exception as e:
+        print(f"Error enviando audio: {e}")
+        bot.send_message(chat_id, texto_respuesta, reply_to_message_id=reply_to_message_id)
+
+# --- CONEXIONES CON GEMINI CON CONTEXTO DE INTEGRANTE ---
+def consultar_gemini(prompt_usuario, nombre_emisor):
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent?key={GEMINI_API_KEY}"
     headers = {"Content-Type": "application/json"}
     
@@ -318,38 +283,29 @@ def consultar_gemini(prompt_usuario):
             {
                 "role": "user",
                 "parts": [{"text": (
-                    f"Instrucciones del sistema: {SYSTEM_INSTRUCTION}\n\n"
+                    f"{SYSTEM_INSTRUCTION}\n\n"
                     f"Hoy es {fecha_actual_str} (Huso horario de Argentina).\n"
-                    "Tienes dos tareas especiales si el usuario te lo pide:\n\n"
-                    "1. AGENDAR EN GOOGLE CALENDAR:\n"
-                    "Si te pide agendar, responde EXCLUSIVAMENTE con este formato:\n"
-                    "AGENDAR|Titulo del evento|YYYY-MM-DDTHH:MM:SS|YYYY-MM-DDTHH:MM:SS|Breve descripcion\n\n"
-                    "2. REGISTRAR EN NOTION:\n"
-                    "Si te pide anotar una tarea para un miembro del equipo (Emi, Delfi, Renzo, Santi o Ari), analiza el texto buscando plazos e importancia.\n"
-                    "Responde EXCLUSIVAMENTE con este formato:\n"
-                    "NOTION|Titulo de la tarea|PersonaAsignada|YYYY-MM-DD|Prioridad\n\n"
-                    "Reglas para NOTION:\n"
-                    "- 'PersonaAsignada' debe ser estrictamente: Emi, Delfi, Renzo, Santi o Ari.\n"
-                    "- 'YYYY-MM-DD' es la fecha límite (o 'None').\n"
-                    "- 'Prioridad' debe ser: Alto, Medio o Bajo.\n\n"
-                    "Si el usuario no pide agendar ni registrar tareas, responde como tu amigable asistente virtual normalmente.\n\n"
-                    f"Mensaje del usuario: {prompt_usuario}"
+                    f"Le estás respondiendo a: {nombre_emisor}.\n\n"
+                    "Formatos especiales:\n"
+                    "NOTION|Titulo de la tarea|PersonaAsignada|YYYY-MM-DD|Prioridad\n"
+                    "PersonaAsignada debe ser estrictamente el nombre de la persona a quien va la tarea: Emi, Delfi, Renzo, Santi o Ari.\n"
+                    "Si el usuario pide una tarea para sí mismo, asígnala a la persona correspondiente.\n"
+                    "Si no se solicita registrar tareas en Notion, responde de forma conversacional, amigable y como COLU.\n\n"
+                    f"Mensaje de {nombre_emisor}: {prompt_usuario}"
                 )}]
             }
         ],
-        "generationConfig": {"temperature": 0.3}
+        "generationConfig": {"temperature": 0.2}
     }
-    
     try:
         response = requests.post(url, json=data, headers=headers)
         if response.status_code == 200:
             return response.json()['candidates'][0]['content']['parts'][0]['text'].strip()
     except Exception as e:
         print(f"Error consultando Gemini: {e}")
-    return "Error de conexión."
+    return "Disculpe, Señor. Tuve una pequeña falla en mi núcleo de comunicación."
 
-# --- CONEXIÓN CON GEMINI (Audio Multimodal) ---
-def consultar_gemini_con_audio(audio_bytes):
+def consultar_gemini_con_audio(audio_bytes, nombre_emisor):
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent?key={GEMINI_API_KEY}"
     headers = {"Content-Type": "application/json"}
     
@@ -371,53 +327,40 @@ def consultar_gemini_con_audio(audio_bytes):
                     },
                     {
                         "text": (
-                            f"Instrucciones del sistema: {SYSTEM_INSTRUCTION}\n\n"
+                            f"{SYSTEM_INSTRUCTION}\n\n"
                             f"Hoy es {fecha_actual_str} (Huso horario de Argentina).\n"
-                            "Acabas de recibir una nota de voz. Escúchala con mucha atención y extrae la orden que contiene.\n"
-                            "Tienes dos tareas especiales si el usuario te lo pide en su audio:\n\n"
-                            "1. AGENDAR EN GOOGLE CALENDAR:\n"
-                            "Si pide agendar, responde EXCLUSIVAMENTE con este formato:\n"
-                            "AGENDAR|Titulo del evento|YYYY-MM-DDTHH:MM:SS|YYYY-MM-DDTHH:MM:SS|Breve descripcion\n\n"
-                            "2. REGISTRAR EN NOTION:\n"
-                            "Si pide anotar una tarea para un miembro del equipo (Emi, Delfi, Renzo, Santi o Ari), analiza el audio buscando plazos e importancia.\n"
-                            "Responde EXCLUSIVAMENTE con este formato:\n"
-                            "NOTION|Titulo de la tarea|PersonaAsignada|YYYY-MM-DD|Prioridad\n\n"
-                            "Reglas para NOTION:\n"
-                            "- 'PersonaAsignada' debe ser estrictamente: Emi, Delfi, Renzo, Santi o Ari.\n"
-                            "- 'YYYY-MM-DD' es la fecha límite (o 'None').\n"
-                            "- 'Prioridad' debe ser: Alto, Medio o Bajo.\n\n"
-                            "Si no pide agendar ni Notion, responde amigablemente transcribiendo lo que te dijo o conversando."
+                            f"La persona que te está hablando en este audio es: {nombre_emisor}.\n\n"
+                            "Si en el audio pide registrar una tarea, responde estrictamente con este formato:\n"
+                            "NOTION|Titulo de la tarea|PersonaAsignada|YYYY-MM-DD|Prioridad\n"
+                            "Recuerda que PersonaAsignada debe ser: Emi, Delfi, Renzo, Santi o Ari.\n"
+                            "Si no se solicita registrar una tarea en Notion, responde conversacionalmente hablándole directamente por su nombre de pila."
                         )
                     }
                 ]
             }
         ],
-        "generationConfig": {"temperature": 0.3}
+        "generationConfig": {"temperature": 0.2}
     }
-    
     try:
         response = requests.post(url, json=data, headers=headers)
         if response.status_code == 200:
             return response.json()['candidates'][0]['content']['parts'][0]['text'].strip()
     except Exception as e:
         print(f"Error procesando audio con Gemini: {e}")
-    return "Error al escuchar la nota de voz."
+    return "Disculpe. No pude decodificar el audio correctamente."
 
 # --- MANEJADORES DE TELEGRAM ---
 @bot.message_handler(commands=['start', 'help'])
 def send_welcome(message):
-    bot.reply_to(message, "¡Asistente listo y conectado con Notion! 🎬📝")
+    bot.reply_to(message, "Sistemas en línea. COLU listo para coordinar Colussi Audiovisuales. 🎬🤖")
 
-# --- MANEJADOR DE CALLBACK (ROBUSTEZ ANTI-DUPLICADOS) ---
 @bot.callback_query_handler(func=lambda call: True)
 def callback_handler(call):
     try:
         data = json.loads(call.data)
-        page_id = data.get("id")
-        nuevo_estado = data.get("est")
-        persona = data.get("p")
+        page_id, nuevo_estado, persona = data.get("id"), data.get("est"), data.get("p")
         
-        # Obtenemos el nombre real de la tarea para notificar
+        # Consultar título de la tarea en Notion
         url = f"https://api.notion.com/v1/pages/{page_id}"
         headers = {"Authorization": f"Bearer {NOTION_API_KEY}", "Notion-Version": "2022-06-28"}
         res = requests.get(url, headers=headers)
@@ -428,252 +371,191 @@ def callback_handler(call):
             titulo = titulo_data[0].get("text", {}).get("content", "Tarea") if titulo_data else "Tarea"
 
         if aplicar_estado_por_id(page_id, nuevo_estado):
-            emoji = "🚀" if nuevo_estado == "En progreso" else "🎉"
-            bot.edit_message_text(
-                chat_id=call.message.chat.id,
-                message_id=call.message.message_id,
-                text=f"{emoji} ¡Hecho! Pasé la tarea *'{titulo}'* a *{nuevo_estado}*.",
-                parse_mode="Markdown"
-            )
-            # Enviamos notificación de feedback a Emiliano en privado
+            bot.edit_message_text(chat_id=call.message.chat.id, message_id=call.message.message_id, text=f"✅ Registro actualizado: *'{titulo}'* pasó a *{nuevo_estado}*.", parse_mode="Markdown")
             notificar_cambio_a_emiliano(persona, titulo, nuevo_estado)
-        else:
-            bot.answer_callback_query(call.id, "No se pudo actualizar en Notion.")
     except Exception as e:
-        print(f"Error en callback: {e}")
-        bot.answer_callback_query(call.id, "Error procesando selección.")
+        print(f"Error callback: {e}")
 
-# --- PROCESAR SOLICITUD DE CAMBIO DE ESTADO (TEXTO O TRANSCRIPCIÓN) ---
-def procesar_cambio_estado(texto, persona_remitente, message):
+def procesar_cambio_estado(texto, persona_remitente, message, usar_audio=False):
     nuevo_estado = None
-    filtro = ""
-    
     if any(x in texto for x in ["empecé", "empece", "arranqué", "arranque", "progreso", "estoy con"]):
         nuevo_estado = "En progreso"
-        filtro = texto.replace("empecé", "").replace("empece", "").replace("arranqué", "").replace("arranque", "").replace("progreso", "").replace("estoy con", "").replace("la tarea", "").replace("de", "").strip()
     elif any(x in texto for x in ["listo", "terminé", "termine"]):
         nuevo_estado = "Listo"
-        filtro = texto.replace("listo", "").replace("terminé", "").replace("termine", "").replace("la tarea", "").replace("de", "").strip()
 
     if not nuevo_estado:
         return False
 
+    filtro = texto.replace("empecé", "").replace("empece", "").replace("arranqué", "").replace("arranque", "").replace("progreso", "").replace("estoy con", "").replace("la tarea", "").replace("de", "").strip()
     candidatas = buscar_tareas_candidatas(filtro, persona_remitente)
     
     if not candidatas:
-        bot.reply_to(message, f"No encontré ninguna tarea activa asignada a vos que coincida con '{filtro}'.")
+        msg = f"No encontré ninguna tarea activa en Notion asignada a vos que coincida con '{filtro}'."
+        if usar_audio:
+            enviar_respuesta_de_voz(message.chat.id, msg, message.message_id)
+        else:
+            bot.reply_to(message, msg)
         return True
         
-    # Robustez si hay más de una tarea coincidente (Flujo híbrido)
     if len(candidatas) > 1:
         markup = telebot.types.InlineKeyboardMarkup(row_width=1)
         for cand in candidatas:
-            # Recortamos texto para evitar errores de longitud en los callback_data de Telegram (máx 64b)
             callback_data = json.dumps({"id": cand["id"][:15], "est": nuevo_estado[:3], "p": persona_remitente[:3]})
             markup.add(telebot.types.InlineKeyboardButton(cand["titulo"], callback_data=callback_data))
-        bot.reply_to(message, "Tengo varias tareas que coinciden. Seleccioná cuál querés actualizar:", reply_markup=markup)
+        bot.reply_to(message, "Tengo varias tareas con ese nombre. Por favor, selecciona la correcta:", reply_markup=markup)
         return True
         
-    # Si hay solo una, la cambiamos directo
     id_tarea = candidatas[0]["id"]
     titulo_tarea = candidatas[0]["titulo"]
     
     if aplicar_estado_por_id(id_tarea, nuevo_estado):
-        emoji = "🚀" if nuevo_estado == "En progreso" else "🎉"
-        bot.reply_to(message, f"{emoji} ¡Bárbaro {persona_remitente}! Pasé la tarea *'{titulo_tarea}'* a *{nuevo_estado}*.", parse_mode="Markdown")
+        msg = f"Perfecto {persona_remitente}. He actualizado la tarea '{titulo_tarea}' a '{nuevo_estado}'."
+        if usar_audio:
+            enviar_respuesta_de_voz(message.chat.id, msg, message.message_id)
+        else:
+            bot.reply_to(message, msg)
         notificar_cambio_a_emiliano(persona_remitente, titulo_tarea, nuevo_estado)
-    else:
-        bot.reply_to(message, "No pude actualizar Notion en este momento.")
     return True
 
-# --- PROCESAR MENSAJES DE VOZ ---
+# --- RECEPTOR DE NOTAS DE VOZ ---
 @bot.message_handler(content_types=['voice'])
 def handle_voice_message(message):
     usuario_id = message.from_user.id
-    is_private = message.chat.type == "private"
+    persona_remitente = next((k for k, v in TELEGRAM_IDS.items() if v and int(v) == usuario_id), None)
     
-    # Filtro estricto: Solo integrantes de Colussi AV
-    persona_remitente = None
-    for key, val in TELEGRAM_IDS.items():
-        if val and int(val) == usuario_id:
-            persona_remitente = key
-            break
-            
     if not persona_remitente:
-        return  # Ignorar por completo a extraños
+        return
 
-    if is_private or (BOT_USERNAME in message.text if message.text else False):
-        try:
-            status_msg = bot.reply_to(message, "🎤 *Escuchando nota de voz...* ⏳", parse_mode="Markdown")
+    try:
+        file_info = bot.get_file(message.voice.file_id)
+        downloaded = bot.download_file(file_info.file_path)
+        respuesta_ai = consultar_gemini_con_audio(downloaded, persona_remitente)
+        
+        # Procesar cambio de estado
+        if procesar_cambio_estado(respuesta_ai.lower().strip(), persona_remitente, message, usar_audio=True):
+            return
             
-            # Descargamos el audio de Telegram
-            file_info = bot.get_file(message.voice.file_id)
-            downloaded_file = bot.download_file(file_info.file_path)
-            
-            # Gemini procesa el audio directamente de forma nativa y gratis
-            respuesta_ai = consultar_gemini_con_audio(downloaded_file)
-            bot.delete_message(message.chat.id, status_msg.message_id)
-            
-            # Intentar ver si el audio era una solicitud de cambio de estado (empecé/listo)
-            texto_limpio = respuesta_ai.lower().strip()
-            if procesar_cambio_estado(texto_limpio, persona_remitente, message):
+        # Restricciones de creación (Solo Emi y Delfi)
+        if respuesta_ai.startswith("NOTION|"):
+            if persona_remitente not in ["Emi", "Delfi"]:
+                enviar_respuesta_de_voz(message.chat.id, "Lo lamento, no cuentas con permisos de administración para asignar tareas en la productora.", message.message_id)
                 return
                 
-            # Restricción de roles para creación de tareas por audio (Solo Emi y Delfi)
-            if respuesta_ai.startswith("NOTION|") or respuesta_ai.startswith("AGENDAR|"):
-                if persona_remitente not in ["Emi", "Delfi"]:
-                    bot.reply_to(message, "Lo siento, no tenés permisos para asignar tareas globales.")
-                    return
+            partes = respuesta_ai.split("|")
+            tarea, persona, plazo_raw, prioridad = partes[1], partes[2], partes[3], partes[4]
+            plazo = None if plazo_raw == "None" else plazo_raw
             
-            # Procesar acción de creación
-            if respuesta_ai.startswith("NOTION|"):
-                partes = respuesta_ai.split("|")
-                if len(partes) >= 5:
-                    tarea, persona, plazo_raw, prioridad = partes[1], partes[2], partes[3], partes[4]
-                    plazo = None if plazo_raw == "None" else plazo_raw
-                    
-                    if agregar_tarea_notion_completa(tarea, persona, plazo, prioridad):
-                        notificado = enviar_alerta_telegram(persona, tarea, plazo, prioridad)
-                        aviso = f"¡Excelente! Anoté en Notion: '{tarea}' asignada a {persona}."
-                        if notificado:
-                            aviso += f"\n💬 Notificación privada enviada a su Telegram."
-                        bot.reply_to(message, aviso)
-            else:
-                bot.reply_to(message, respuesta_ai)
-                
-        except Exception as e:
-            bot.reply_to(message, f"Error de audio: {str(e)}")
+            if agregar_tarea_notion_completa(tarea, persona, plazo, prioridad):
+                enviar_alerta_telegram(persona, tarea, plazo, prioridad)
+                enviar_respuesta_de_voz(message.chat.id, f"Entendido. He registrado la tarea '{tarea}' asignada a {persona} en Notion.", message.message_id)
+        else:
+            # Respuesta conversacional/técnica por voz
+            enviar_respuesta_de_voz(message.chat.id, respuesta_ai, message.message_id)
+    except Exception as e:
+        print(f"Error de audio: {e}")
 
-# --- MANEJADOR DE MENSAJES DE TEXTO ---
+# --- RECEPTOR DE TEXTO ---
 @bot.message_handler(func=lambda message: True)
 def handle_message(message):
     usuario_id = message.from_user.id
-    is_private = message.chat.type == "private"
-    is_mentioned = BOT_USERNAME in message.text if (message.text and BOT_USERNAME) else False
-
-    # Filtro estricto: Solo integrantes registrados
-    persona_remitente = None
-    for key, val in TELEGRAM_IDS.items():
-        if val and int(val) == usuario_id:
-            persona_remitente = key
-            break
-            
+    persona_remitente = next((k for k, v in TELEGRAM_IDS.items() if v and int(v) == usuario_id), None)
+    
     if not persona_remitente:
-        return  # Ignorar extraños
+        return
 
-    if is_private or is_mentioned:
-        texto = message.text.lower().strip()
-        
-        # 1. ACCESO GLOBAL A CONSULTAS (Solo Emi y Delfi ven todo)
-        if any(x in texto for x in ["reporte general", "como venimos", "tareas generales", "todas las tareas"]):
-            if persona_remitente not in ["Emi", "Delfi"]:
-                bot.reply_to(message, "Lo siento, solo Emiliano y Delfi pueden solicitar el reporte general de la productora.")
-                return
-                
-            pendientes = obtener_pendientes_notion()
-            if not pendientes:
-                bot.reply_to(message, "🙌 ¡Excelente! No hay tareas pendientes en toda la productora.")
-                return
-                
-            mensaje = "📋 *Estado General de Tareas - Colussi AV:*\n\n"
-            for pers, bloques in pendientes.items():
-                mensaje += f"👤 *{pers}:*\n"
-                if bloques["en_progreso"]:
-                    mensaje += "  ⏳ *En progreso:*\n" + "\n".join([f"    🔹 {t}" for t in bloques["en_progreso"]]) + "\n"
-                if bloques["sin_empezar"]:
-                    mensaje += "  💤 *Sin empezar:*\n" + "\n".join([f"    🔹 {t}" for t in bloques["sin_empezar"]]) + "\n"
-                mensaje += "\n"
-            bot.reply_to(message, mensaje, parse_mode="Markdown")
-            return
-
-        # 2. CONSULTAS INDIVIDUALES (Cualquiera del equipo consulta lo suyo)
-        if any(x in texto for x in ["mis tareas", "tengo tareas", "tengo alguna tarea", "que tengo que hacer", "que tareas tengo"]):
-            pendientes = obtener_pendientes_notion()
-            bloques = pendientes.get(persona_remitente)
-            
-            if not bloques or (not bloques["sin_empezar"] and not bloques["en_progreso"]):
-                bot.reply_to(message, f"🙌 ¡Al día, {persona_remitente}! No tenés ninguna tarea pendiente asignada. ¡Excelente!")
-                return
-                
-            mensaje = f"📝 *Tus tareas pendientes actuales, {persona_remitente}:*\n\n"
-            if bloques["en_progreso"]:
-                mensaje += "⏳ *EN PROGRESO:*\n" + "\n".join([f"  🔹 {t}" for t in bloques["en_progreso"]]) + "\n\n"
-            if bloques["sin_empezar"]:
-                mensaje += "💤 *SIN EMPEZAR:*\n" + "\n".join([f"  🔹 {t}" for t in bloques["sin_empezar"]]) + "\n\n"
-                
-            bot.reply_to(message, mensaje, parse_mode="Markdown")
-            return
-
-        # 3. PROCESAR ACCIONES DE "EMPECÉ" O "LISTO" (TEXTO)
-        if procesar_cambio_estado(texto, persona_remitente, message):
-            return
-
-        # 4. RESTRICCIÓN DE ASIGNACIÓN (Solo Emi y Delfi pueden crear tareas usando Gemini)
-        clean_text = message.text.replace(f"@{BOT_USERNAME}", "").strip() if BOT_USERNAME else message.text.strip()
-        if not clean_text:
-            return
-
+    texto = message.text.lower().strip()
+    
+    # 1. Reporte manual solicitado por Emi o Delfi (Corregida palabra clave "reporte" sola)
+    if any(x in texto for x in ["reporte", "reporte general", "como venimos", "todas las tareas"]):
         if persona_remitente not in ["Emi", "Delfi"]:
-            bot.reply_to(message, "Solo Emiliano y Delfi tienen permisos de administración.")
+            bot.reply_to(message, "Lo lamento, no cuentas con los permisos de acceso requeridos.")
             return
+        pendientes = obtener_pendientes_notion()
+        if not pendientes:
+            bot.reply_to(message, "Excelente, Emiliano. No hay tareas pendientes en toda la productora.")
+            return
+        mensaje = "📋 *Estado General de Producción - Colussi AV:*\n\n"
+        for pers, bloques in pendientes.items():
+            mensaje += f"👤 *{pers}:*\n"
+            if bloques["en_progreso"]:
+                mensaje += "  ⏳ *En progreso:*\n" + "\n".join([f"    🔹 {t}" for t in bloques["en_progreso"]]) + "\n"
+            if bloques["sin_empezar"]:
+                mensaje += "  💤 *Sin empezar:*\n" + "\n".join([f"    🔹 {t}" for t in bloques["sin_empezar"]]) + "\n"
+            mensaje += "\n"
+        bot.reply_to(message, mensaje, parse_mode="Markdown")
+        return
 
-        # Consultar Gemini
-        try:
-            respuesta_ai = consultar_gemini(clean_text)
-            
-            if respuesta_ai.startswith("AGENDAR|"):
-                partes = respuesta_ai.split("|")
-                if len(partes) >= 5:
-                    resultado = agendar_evento_google(partes[1], partes[2], partes[3], partes[4])
-                    bot.reply_to(message, resultado)
-                    
-            elif respuesta_ai.startswith("NOTION|"):
-                partes = respuesta_ai.split("|")
-                if len(partes) >= 5:
-                    tarea, persona, plazo_raw, prioridad = partes[1], partes[2], partes[3], partes[4]
-                    plazo = None if plazo_raw == "None" else plazo_raw
-                    
-                    if agregar_tarea_notion_completa(tarea, persona, plazo, prioridad):
-                        notificado = enviar_alerta_telegram(persona, tarea, plazo, prioridad)
-                        
-                        es_presu = "presupuesto" in tarea.lower()
-                        prioridad_aviso = "Alto (Urgente ⚠️)" if es_presu else prioridad
-                        
-                        aviso = f"¡Excelente! Anoté en Notion: '{tarea}' asignada a {persona} con prioridad *{prioridad_aviso}*. 📝"
-                        if notificado:
-                            aviso += f"\n💬 Notificación privada enviada a su Telegram."
-                        bot.reply_to(message, aviso)
-            else:
-                bot.reply_to(message, respuesta_ai)
-        except Exception as e:
-            bot.reply_to(message, f"Error: {str(e)}")
+    # 2. Consulta de tareas individuales
+    if any(x in texto for x in ["mis tareas", "que tengo que hacer", "que tareas tengo"]):
+        pendientes = obtener_pendientes_notion()
+        bloques = pendientes.get(persona_remitente)
+        if not bloques or (not bloques["sin_empezar"] and not bloques["en_progreso"]):
+            bot.reply_to(message, f"Estás al día, {persona_remitente}. Excelente labor.")
+            return
+        mensaje = f"📝 *Tareas pendientes para {persona_remitente}:*\n\n"
+        if bloques["en_progreso"]:
+            mensaje += "⏳ *EN PROGRESO:*\n" + "\n".join([f"  🔹 {t}" for t in bloques["en_progreso"]]) + "\n\n"
+        if bloques["sin_empezar"]:
+            mensaje += "💤 *SIN EMPEZAR:*\n" + "\n".join([f"  🔹 {t}" for t in bloques["sin_empezar"]]) + "\n\n"
+        bot.reply_to(message, mensaje, parse_mode="Markdown")
+        return
 
-# --- SERVIDOR HTTP ---
+    # 3. Procesar solicitudes de avance por texto
+    if procesar_cambio_estado(texto, persona_remitente, message, usar_audio=False):
+        return
+
+    # 4. Restricción de creación
+    if persona_remitente not in ["Emi", "Delfi"]:
+        bot.reply_to(message, "Acceso de administración denegado. Solo Emiliano y Delfi pueden reescribir la base de datos.")
+        return
+
+    # Gemini procesa texto (Consultas técnicas, creativas o formatos de tareas)
+    try:
+        respuesta_ai = consultar_gemini(message.text, persona_remitente)
+        if respuesta_ai.startswith("NOTION|"):
+            partes = respuesta_ai.split("|")
+            tarea, persona, plazo_raw, prioridad = partes[1], partes[2], partes[3], partes[4]
+            plazo = None if plazo_raw == "None" else plazo_raw
+            if agregar_tarea_notion_completa(tarea, persona, plazo, prioridad):
+                enviar_alerta_telegram(persona, tarea, plazo, prioridad)
+                bot.reply_to(message, f"Excelente. He registrado '{tarea}' para {persona} en Notion.")
+        else:
+            bot.reply_to(message, respuesta_ai)
+    except Exception as e:
+        bot.reply_to(message, f"Error en sistema de consulta: {e}")
+
+# --- SERVIDOR WEB ---
 class WebhookHandler(BaseHTTPRequestHandler):
     def do_GET(self):
-        if self.path == "/" or self.path == "":
+        if self.path in ["/", ""]:
             self.send_response(200)
             self.send_header("Content-type", "text/plain")
             self.end_headers()
-            self.wfile.write(b"Bot activo y despierto")
-            
+            self.wfile.write(b"COLU Online.")
         elif self.path == "/recordatorio":
             self.send_response(200)
             self.send_header("Content-type", "text/plain")
             self.end_headers()
-            resultado = enviar_reporte_matutino()
-            self.wfile.write(resultado.encode("utf-8"))
+            
+            # Obtener la hora de Argentina (UTC-3)
+            hora_arg = datetime.datetime.utcnow() - timedelta(hours=3)
+            hora_actual = hora_arg.hour
+            minutos_actuales = hora_arg.minute
+            
+            # El Cron-Job pasa cada 10 min. Evaluamos que sea la hora 9 (9:00 AM) y los primeros 10 min
+            if hora_actual == 9 and minutos_actuales < 11:
+                resultado = enviar_reporte_y_diagnostico_colu()
+                self.wfile.write(f"Reporte diario ejecutado: {resultado}".encode("utf-8"))
+            else:
+                # El resto del día, solo responde OK para mantenerse despierto sin saturarte de mensajes
+                self.wfile.write(b"Ping recibido de Cron-Job. COLU despierto y atento.")
         else:
             self.send_response(404)
             self.end_headers()
 
 def run_server():
     port = int(os.environ.get("PORT", 10000))
-    server = HTTPServer(("0.0.0.0", port), WebhookHandler)
-    server.serve_forever()
+    HTTPServer(("0.0.0.0", port), WebhookHandler).serve_forever()
 
-server_thread = threading.Thread(target=run_server, daemon=True)
-server_thread.start()
-
-print("Bot final encendido...")
+threading.Thread(target=run_server, daemon=True).start()
 bot.infinity_polling()
