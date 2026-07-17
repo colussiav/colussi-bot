@@ -4,6 +4,7 @@ import telebot
 import json
 import datetime
 from datetime import timedelta
+import base64
 from http.server import BaseHTTPRequestHandler, HTTPServer
 import threading
 
@@ -35,10 +36,10 @@ except Exception as e:
 # --- INSTRUCCIÓN GENERAL PARA COLU ---
 SYSTEM_INSTRUCTION = (
     "Eres 'COLU', el asistente virtual oficial de 'Colussi Audiovisuales'. "
-    "Tu tono es profesional, educado, sophisticated y sumamente eficiente. "
+    "Tu tono es profesional, educado, sofisticado y sumamente eficiente. "
     "Conoces a la perfección el rubro audiovisual (cámaras, iluminación, postproducción, flujos de trabajo, setups de cine). "
     "Tu misión es facilitar la gestión del estudio para Emi, Delfi, Renzo, Santi y Ari. "
-    "Responde siempre de forma clara, concisa y profesional en texto. Ve directo al grano. "
+    "Responde siempre de forma clara, concisa y profesional mediante mensajes de texto. Ve directo al grano. "
     "REGLA DE ORO PARA PLAZOS: Si el usuario NO menciona explícitamente un límite de tiempo (como 'para mañana', 'el viernes'), "
     "debes colocar obligatoriamente 'None' en el campo de fecha. Queda terminantemente PROHIBIDO inventar plazos."
 )
@@ -179,9 +180,9 @@ def enviar_alerta_telegram(persona, nombre_tarea, fecha_plazo=None, prioridad="M
     try: return requests.post(url, json={"chat_id": telegram_id, "text": mensaje, "parse_mode": "Markdown"}).status_code == 200
     except: return False
 
-# --- CONEXIÓN CON GEMINI TEXTO OFICIAL (2.0-FLASH) ---
+# --- CONEXIÓN CON GEMINI TEXTO ULTRAESTABLE (1.5-FLASH) ---
 def consultar_gemini(prompt_usuario, nombre_emisor):
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={GEMINI_API_KEY}"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
     headers = {"Content-Type": "application/json"}
     hora_arg = datetime.datetime.utcnow() - timedelta(hours=3)
     
@@ -207,6 +208,22 @@ def consultar_gemini(prompt_usuario, nombre_emisor):
         print(f"Error Gemini: {e}")
     return "Disculpe, Señor. Tuve un inconveniente al procesar la solicitud."
 
+# --- PROCESAMIENTO DE AUDIO MEJORADO (STT) ---
+def transcribir_audio_con_gemini(audio_bytes):
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
+    headers = {"Content-Type": "application/json"}
+    audio_b64 = base64.b64encode(audio_bytes).decode("utf-8")
+    data = {
+        "contents": [{"role": "user", "parts": [{"inline_data": {"mime_type": "audio/ogg", "data": audio_b64}}, {"text": "Transcribe este audio de forma exacta, literal y limpia sin comentarios adicionales."}]}],
+        "generationConfig": {"temperature": 0.0}
+    }
+    try:
+        res = requests.post(url, json=data, headers=headers)
+        if res.status_code == 200: return res.json()['candidates'][0]['content']['parts'][0]['text'].strip()
+    except Exception as e:
+        print(f"Error STT: {e}")
+    return None
+
 # --- EVALUADOR DE COMANDOS DIRECTOS DE NOTION ---
 def ejecutar_comando_notion(texto, persona_remitente, message):
     texto_lower = texto.lower().strip()
@@ -219,7 +236,7 @@ def ejecutar_comando_notion(texto, persona_remitente, message):
         if not pendientes:
             bot.reply_to(message, "Excelente. No hay tareas pendientes en toda la productora.")
             return True
-        mensaje = "📋 *Estado General de Production - Colussi AV:*\n\n"
+        mensaje = "📋 *Estado General de Producción - Colussi AV:*\n\n"
         for pers, bloques in pendientes.items():
             mensaje += f"👤 *{pers}:*\n"
             if bloques["en_progreso"]: mensaje += "  ⏳ *En progreso:*\n" + "\n".join([f"    🔹 {t}" for t in bloques["en_progreso"]]) + "\n"
@@ -243,6 +260,38 @@ def ejecutar_comando_notion(texto, persona_remitente, message):
     if procesar_cambio_estado(texto_lower, persona_remitente, message):
         return True
     return False
+
+# --- RECEPTOR DE NOTAS DE VOZ ---
+@bot.message_handler(content_types=['voice'])
+def handle_voice_message(message):
+    usuario_id = message.from_user.id
+    persona_remitente = next((k for k, v in TELEGRAM_IDS.items() if v and int(v) == usuario_id), None)
+    if not persona_remitente: return
+    try:
+        file_info = bot.get_file(message.voice.file_id)
+        file_url = f"https://api.telegram.org/file/bot{TELEGRAM_TOKEN}/{file_info.file_path}"
+        response_audio = requests.get(file_url)
+        if response_audio.status_code != 200: return
+        downloaded = response_audio.content
+        texto_transcrito = transcribir_audio_con_gemini(downloaded)
+        if not texto_transcrito: return
+        
+        print(f"Audio transcrito: '{texto_transcrito}'")
+        if ejecutar_comando_notion(texto_transcrito, persona_remitente, message): return
+        
+        respuesta_ai = consultar_gemini(texto_transcrito, persona_remitente)
+        if respuesta_ai.startswith("NOTION|"):
+            if persona_remitente not in ["Emi", "Delfi"]: return
+            partes = respuesta_ai.split("|")
+            tarea, persona, plazo_raw, prioridad = partes[1], partes[2], partes[3], partes[4]
+            plazo = None if plazo_raw == "None" else plazo_raw
+            if agregar_tarea_notion_completa(tarea, persona, plazo, prioridad):
+                enviar_alerta_telegram(persona, tarea, plazo, prioridad)
+                bot.reply_to(message, f"✅ Entendido. He registrado la tarea '{tarea}' para {persona} en Notion.")
+        else:
+            bot.reply_to(message, respuesta_ai)
+    except Exception as e:
+        print(f"Error de audio: {e}")
 
 # --- RECEPTOR DE TEXTO PRINCIPAL ---
 @bot.message_handler(func=lambda message: True)
