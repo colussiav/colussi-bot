@@ -27,7 +27,6 @@ TELEGRAM_IDS = {
     "Emi": os.environ.get("TELEGRAM_ID_EMI")
 }
 
-# Lee tu ID de administrador directamente desde la variable de Render o fallback seguro
 ADMIN_TELEGRAM_ID = int(os.environ.get("TELEGRAM_ID_EMI")) if os.environ.get("TELEGRAM_ID_EMI") else 8802307065
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
@@ -169,7 +168,7 @@ def aplicar_estado_por_id(page_id, nuevo_estado):
     res = requests.patch(url, json=update_data, headers=headers)
     return res.status_code == 200
 
-# --- TELEGRAM: ENVIAR NOTIFICACIÓN DE PROGRESO (FEEDBACK) ---
+# --- TELEGRAM: NOTIFICACIONES ---
 def notificar_cambio_a_emiliano(persona, tarea, nuevo_estado):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     emoji = "🚀" if nuevo_estado == "En progreso" else "🎉"
@@ -186,7 +185,6 @@ def notificar_cambio_a_emiliano(persona, tarea, nuevo_estado):
     except:
         pass
 
-# --- TELEGRAM: ENVIAR ALERTA INDIVIDUAL ---
 def enviar_alerta_telegram(persona, nombre_tarea, fecha_plazo=None, prioridad="Medio"):
     telegram_id = TELEGRAM_IDS.get(persona)
     if not telegram_id:
@@ -211,7 +209,7 @@ def enviar_alerta_telegram(persona, nombre_tarea, fecha_plazo=None, prioridad="M
     except:
         return False
 
-# --- PROCESO: DIAGNÓSTICO PROACTIVO AUTOMÁTICO DE COLU ---
+# --- DIAGNÓSTICO MATUTINO ENVIADO POR EL CRON-JOB ---
 def enviar_reporte_y_diagnostico_colu():
     print("Ejecutando diagnóstico proactivo de COLU...")
     pendientes = obtener_pendientes_notion()
@@ -219,7 +217,6 @@ def enviar_reporte_y_diagnostico_colu():
     if not pendientes:
         return "No hay tareas pendientes en la base de datos."
         
-    # 1. Enviar el reporte matutino a los chicos
     for persona, bloques in pendientes.items():
         telegram_id = TELEGRAM_IDS.get(persona)
         if telegram_id and persona != "Emi":
@@ -238,7 +235,6 @@ def enviar_reporte_y_diagnostico_colu():
             
             requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", json={"chat_id": telegram_id, "text": mensaje, "parse_mode": "Markdown"})
 
-    # 2. El Diagnóstico Proactivo consolidado para Emiliano
     alertas = []
     for persona, bloques in pendientes.items():
         sin_emp = bloques["sin_empezar"]
@@ -262,9 +258,8 @@ def enviar_reporte_y_diagnostico_colu():
     requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage", json={"chat_id": ADMIN_TELEGRAM_ID, "text": diagnostico_msg, "parse_mode": "Markdown"})
     return "Diagnóstico y reportes completados con éxito."
 
-# --- RESPUESTAS DE VOZ CON ELEVENLABS (MÉTODO HTTP DIRECTO - SIN DEPENDENCIAS) ---
+# --- RESPUESTAS DE VOZ ELEVENLABS NATIIVAS POR HTTP ---
 def enviar_respuesta_de_voz(chat_id, texto_respuesta, reply_to_message_id):
-    # 1. Filtro inteligente de Notion para evitar que lea códigos técnicos
     if texto_respuesta.startswith("NOTION|"):
         try:
             partes = texto_respuesta.split("|")
@@ -275,7 +270,6 @@ def enviar_respuesta_de_voz(chat_id, texto_respuesta, reply_to_message_id):
         except:
             texto_limpio = "Perfecto. Ya registré la tarea en el sistema."
     else:
-        # 2. Limpieza estricta de caracteres especiales
         texto_limpio = (
             texto_respuesta
             .replace("*", "")
@@ -291,7 +285,6 @@ def enviar_respuesta_de_voz(chat_id, texto_respuesta, reply_to_message_id):
             .strip()
         )
         
-        # Eliminamos saludos redundantes de arranque
         saludos_a_quitar = [
             "hola emi", "hola santiago", "hola santi", "hola renzo", "hola delfi", "hola ari",
             "hola, emi", "hola, santi", "hola, renzo", "hola, delfi", "hola, ari",
@@ -309,7 +302,6 @@ def enviar_respuesta_de_voz(chat_id, texto_respuesta, reply_to_message_id):
         if texto_limpio.lower() == "none" or not texto_limpio:
             texto_limpio = "Sistemas en línea."
 
-    # 3. Solicitud directa HTTP a ElevenLabs (Voz de Adam y modelo ultrarrápido Flash)
     url_eleven = "https://api.elevenlabs.io/v1/text-to-speech/pNInz6obpg7AN65J67rW"
     headers = {
         "xi-api-key": ELEVENLABS_API_KEY,
@@ -331,13 +323,13 @@ def enviar_respuesta_de_voz(chat_id, texto_respuesta, reply_to_message_id):
             audio_memoria.seek(0)
             bot.send_voice(chat_id=chat_id, voice=audio_memoria, reply_to_message_id=reply_to_message_id)
         else:
-            print(f"Error ElevenLabs: {response.status_code} - {response.text}")
+            print(f"Error ElevenLabs API Status: {response.status_code} - {response.text}")
             bot.send_message(chat_id, texto_respuesta, reply_to_message_id=reply_to_message_id)
     except Exception as e:
-        print(f"Error enviando voz ElevenLabs: {e}")
+        print(f"Error conectando con ElevenLabs: {e}")
         bot.send_message(chat_id, texto_respuesta, reply_to_message_id=reply_to_message_id)
 
-# --- CONEXIONES CON GEMINI CON CONTEXTO DE INTEGRANTE ---
+# --- CONEXIÓN CON GEMINI TEXTO ---
 def consultar_gemini(prompt_usuario, nombre_emisor):
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent?key={GEMINI_API_KEY}"
     headers = {"Content-Type": "application/json"}
@@ -372,76 +364,141 @@ def consultar_gemini(prompt_usuario, nombre_emisor):
         print(f"Error consultando Gemini: {e}")
     return "Disculpe, Señor. Tuve una pequeña falla en mi núcleo de comunicación."
 
-def consultar_gemini_con_audio(audio_bytes, nombre_emisor):
+# --- PROCESAMIENTO DE AUDIO MEJORADO (STT DE ALTA FIDELIDAD CON GEMINI) ---
+def transcribir_audio_con_gemini(audio_bytes):
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent?key={GEMINI_API_KEY}"
     headers = {"Content-Type": "application/json"}
-    
     audio_b64 = base64.b64encode(audio_bytes).decode("utf-8")
-    
-    hora_arg = datetime.datetime.utcnow() - timedelta(hours=3)
-    fecha_actual_str = hora_arg.strftime('%Y-%m-%d %H:%M')
     
     data = {
         "contents": [
             {
                 "role": "user",
                 "parts": [
-                    {
-                        "inline_data": {
-                            "mime_type": "audio/ogg",
-                            "data": audio_b64
-                        }
-                    },
-                    {
-                        "text": (
-                            f"{SYSTEM_INSTRUCTION}\n\n"
-                            f"Hoy es {fecha_actual_str} (Huso horario de Argentina).\n"
-                            f"La persona que te está hablando en este audio es: {nombre_emisor}.\n\n"
-                            "Si en el audio pide registrar una tarea, responde estrictamente con este formato:\n"
-                            "NOTION|Titulo de la tarea|PersonaAsignada|YYYY-MM-DD|Prioridad\n"
-                            "Recuerda que PersonaAsignada debe ser: Emi, Delfi, Renzo, Santi o Ari.\n"
-                            "Si no se solicita registrar una tarea en Notion, responde conversacionalmente hablándele directamente por su nombre de pila."
-                        )
-                    }
+                    {"inline_data": {"mime_type": "audio/ogg", "data": audio_b64}},
+                    {"text": "Transcribe este audio de voz a texto de forma exacta, literal, respetando los nombres propios del español latino. Devuelve única y exclusivamente la transcripción limpia sin comentarios adicionales."}
                 ]
             }
         ],
-        "generationConfig": {"temperature": 0.2}
+        "generationConfig": {"temperature": 0.0}
     }
     try:
         response = requests.post(url, json=data, headers=headers)
         if response.status_code == 200:
             return response.json()['candidates'][0]['content']['parts'][0]['text'].strip()
     except Exception as e:
-        print(f"Error procesando audio con Gemini: {e}")
-    return "Disculpe. No pude decodificar el audio correctamente."
+        print(f"Error en STT: {e}")
+    return None
 
-# --- MANEJADORES DE TELEGRAM ---
-@bot.message_handler(commands=['start', 'help'])
-def send_welcome(message):
-    bot.reply_to(message, "Sistemas en línea. COLU listo para coordinar Colussi Audiovisuales. 🎬🤖")
+# --- RECEPTOR DE NOTAS DE VOZ ---
+@bot.message_handler(content_types=['voice'])
+def handle_voice_message(message):
+    usuario_id = message.from_user.id
+    persona_remitente = next((k for k, v in TELEGRAM_IDS.items() if v and int(v) == usuario_id), None)
+    
+    if not persona_remitente:
+        return
 
-@bot.callback_query_handler(func=lambda call: True)
-def callback_handler(call):
     try:
-        data = json.loads(call.data)
-        page_id, nuevo_estado, persona = data.get("id"), data.get("est"), data.get("p")
+        file_info = bot.get_file(message.voice.file_id)
+        downloaded = bot.download_file(file_info.file_path)
         
-        # Consultar título de la tarea en Notion
-        url = f"https://api.notion.com/v1/pages/{page_id}"
-        headers = {"Authorization": f"Bearer {NOTION_API_KEY}", "Notion-Version": "2022-06-28"}
-        res = requests.get(url, headers=headers)
-        titulo = "Tarea"
-        if res.status_code == 200:
-            propiedades = res.json().get("properties", {})
-            titulo_data = propiedades.get("Nombre de la tarea", {}).get("title", [])
-            titulo = titulo_data[0].get("text", {}).get("content", "Tarea") if titulo_data else "Tarea"
-
-        if aplicar_estado_por_id(page_id, nuevo_estado):
-            bot.edit_message_text(chat_id=call.message.chat.id, message_id=call.message.message_id, text=f"✅ Registro actualizado: *'{titulo}'* pasó a *{nuevo_estado}*.", parse_mode="Markdown")
-            notificar_cambio_a_emiliano(persona, titulo, nuevo_estado)
+        # 1. Transcribimos primero el audio a texto limpio
+        texto_transcrito = transcribir_audio_con_gemini(downloaded)
+        if not texto_transcrito:
+            enviar_respuesta_de_voz(message.chat.id, "Disculpe. No pude comprender correctamente el mensaje de audio.", message.message_id)
+            return
+            
+        print(f"Audio de {persona_remitente} traducido a texto: '{texto_transcrito}'")
+        
+        # 2. Procesar cambio de estado de Notion con el texto perfecto
+        if procesar_cambio_estado(texto_transcrito.lower().strip(), persona_remitente, message, usar_audio=True):
+            return
+            
+        # 3. Consultar a Gemini qué acción tomar
+        respuesta_ai = consultar_gemini(texto_transcrito, persona_remitente)
+        
+        if respuesta_ai.startswith("NOTION|"):
+            if persona_remitente not in ["Emi", "Delfi"]:
+                enviar_respuesta_de_voz(message.chat.id, "Lo lamento, no cuentas con permisos de administración para asignar tareas en la productora.", message.message_id)
+                return
+                
+            partes = respuesta_ai.split("|")
+            tarea, persona, plazo_raw, prioridad = partes[1], partes[2], partes[3], partes[4]
+            plazo = None if plazo_raw == "None" else plazo_raw
+            
+            if agregar_tarea_notion_completa(tarea, persona, plazo, prioridad):
+                enviar_alerta_telegram(persona, tarea, plazo, prioridad)
+                enviar_respuesta_de_voz(message.chat.id, f"He registrado la tarea '{tarea}' asignada a {persona} en Notion.", message.message_id)
+        else:
+            enviar_respuesta_de_voz(message.chat.id, respuesta_ai, message.message_id)
     except Exception as e:
-        print(f"Error callback: {e}")
+        print(f"Error de audio: {e}")
+
+# --- RECEPTOR DE TEXTO ---
+@bot.message_handler(func=lambda message: True)
+def handle_message(message):
+    usuario_id = message.from_user.id
+    persona_remitente = next((k for k, v in TELEGRAM_IDS.items() if v and int(v) == usuario_id), None)
+    
+    if not persona_remitente:
+        return
+
+    texto = message.text.lower().strip()
+    
+    if any(x in texto for x in ["reporte", "reporte general", "como venimos", "todas las tareas"]):
+        if persona_remitente not in ["Emi", "Delfi"]:
+            bot.reply_to(message, "Lo lamento, no cuentas con los permisos de acceso requeridos.")
+            return
+        pendientes = obtener_pendientes_notion()
+        if not pendientes:
+            bot.reply_to(message, "Excelente. No hay tareas pendientes en toda la productora.")
+            return
+        mensaje = "📋 *Estado General de Producción - Colussi AV:*\n\n"
+        for pers, bloques in pendientes.items():
+            mensaje += f"👤 *{pers}:*\n"
+            if bloques["en_progreso"]:
+                mensaje += "  ⏳ *En progreso:*\n" + "\n".join([f"    🔹 {t}" for t in bloques["en_progreso"]]) + "\n"
+            if bloques["sin_empezar"]:
+                mensaje += "  💤 *Sin empezar:*\n" + "\n".join([f"    🔹 {t}" for t in bloques["sin_empezar"]]) + "\n"
+            mensaje += "\n"
+        bot.reply_to(message, mensaje, parse_mode="Markdown")
+        return
+
+    if any(x in texto for x in ["mis tareas", "que tengo que hacer", "que tareas tengo"]):
+        pendientes = obtener_pendientes_notion()
+        bloques = pendientes.get(persona_remitente)
+        if not bloques or (not bloques["sin_empezar"] and not bloques["en_progreso"]):
+            bot.reply_to(message, f"Estás al día, {persona_remitente}. Excelente labor.")
+            return
+        mensaje = f"📝 *Tareas pendientes para {persona_remitente}:*\n\n"
+        if bloques["en_progreso"]:
+            mensaje += "⏳ *EN PROGRESO:*\n" + "\n".join([f"  🔹 {t}" for t in bloques["en_progreso"]]) + "\n\n"
+        if bloques["sin_empezar"]:
+            mensaje += "💤 *SIN EMPEZAR:*\n" + "\n".join([f"  🔹 {t}" for t in bloques["sin_empezar"]]) + "\n\n"
+        bot.reply_to(message, mensaje, parse_mode="Markdown")
+        return
+
+    if procesar_cambio_estado(texto, persona_remitente, message, usar_audio=False):
+        return
+
+    if persona_remitente not in ["Emi", "Delfi"]:
+        bot.reply_to(message, "Acceso de administración denegado. Solo Emiliano y Delfi pueden reescribir la base de datos.")
+        return
+
+    try:
+        respuesta_ai = consultar_gemini(message.text, persona_remitente)
+        if respuesta_ai.startswith("NOTION|"):
+            partes = respuesta_ai.split("|")
+            tarea, persona, plazo_raw, prioridad = partes[1], partes[2], partes[3], partes[4]
+            plazo = None if plazo_raw == "None" else plazo_raw
+            if agregar_tarea_notion_completa(tarea, persona, plazo, prioridad):
+                enviar_alerta_telegram(persona, tarea, plazo, prioridad)
+                bot.reply_to(message, f"Excelente. He registrado '{tarea}' para {persona} en Notion.")
+        else:
+            bot.reply_to(message, respuesta_ai)
+    except Exception as e:
+        bot.reply_to(message, f"Error en sistema de consulta: {e}")
 
 def procesar_cambio_estado(texto, persona_remitente, message, usar_audio=False):
     nuevo_estado = None
@@ -484,114 +541,7 @@ def procesar_cambio_estado(texto, persona_remitente, message, usar_audio=False):
         notificar_cambio_a_emiliano(persona_remitente, titulo_tarea, nuevo_estado)
     return True
 
-# --- RECEPTOR DE NOTAS DE VOZ ---
-@bot.message_handler(content_types=['voice'])
-def handle_voice_message(message):
-    usuario_id = message.from_user.id
-    persona_remitente = next((k for k, v in TELEGRAM_IDS.items() if v and int(v) == usuario_id), None)
-    
-    if not persona_remitente:
-        return
-
-    try:
-        file_info = bot.get_file(message.voice.file_id)
-        downloaded = bot.download_file(file_info.file_path)
-        respuesta_ai = consultar_gemini_con_audio(downloaded, persona_remitente)
-        
-        # Procesar cambio de estado
-        if procesar_cambio_estado(respuesta_ai.lower().strip(), persona_remitente, message, usar_audio=True):
-            return
-            
-        # Restricciones de creación (Solo Emi y Delfi)
-        if respuesta_ai.startswith("NOTION|"):
-            if persona_remitente not in ["Emi", "Delfi"]:
-                enviar_respuesta_de_voz(message.chat.id, "Lo lamento, no cuentas con permisos de administración para asignar tareas en la productora.", message.message_id)
-                return
-                
-            partes = respuesta_ai.split("|")
-            tarea, persona, plazo_raw, prioridad = partes[1], partes[2], partes[3], partes[4]
-            plazo = None if plazo_raw == "None" else plazo_raw
-            
-            if agregar_tarea_notion_completa(tarea, persona, plazo, prioridad):
-                enviar_alerta_telegram(persona, tarea, plazo, prioridad)
-                enviar_respuesta_de_voz(message.chat.id, f"He registrado la tarea '{tarea}' asignada a {persona} en Notion.", message.message_id)
-        else:
-            # Respuesta conversacional/técnica por voz
-            enviar_respuesta_de_voz(message.chat.id, respuesta_ai, message.message_id)
-    except Exception as e:
-        print(f"Error de audio: {e}")
-
-# --- RECEPTOR DE TEXTO ---
-@bot.message_handler(func=lambda message: True)
-def handle_message(message):
-    usuario_id = message.from_user.id
-    persona_remitente = next((k for k, v in TELEGRAM_IDS.items() if v and int(v) == usuario_id), None)
-    
-    if not persona_remitente:
-        return
-
-    texto = message.text.lower().strip()
-    
-    # 1. Reporte manual solicitado por Emi o Delfi (Corregida palabra clave "reporte" sola)
-    if any(x in texto for x in ["reporte", "reporte general", "como venimos", "todas las tareas"]):
-        if persona_remitente not in ["Emi", "Delfi"]:
-            bot.reply_to(message, "Lo lamento, no cuentas con los permisos de acceso requeridos.")
-            return
-        pendientes = obtener_pendientes_notion()
-        if not pendientes:
-            bot.reply_to(message, "Excelente, Emiliano. No hay tareas pendientes en toda la productora.")
-            return
-        mensaje = "📋 *Estado General de Producción - Colussi AV:*\n\n"
-        for pers, bloques in pendientes.items():
-            mensaje += f"👤 *{pers}:*\n"
-            if bloques["en_progreso"]:
-                mensaje += "  ⏳ *En progreso:*\n" + "\n".join([f"    🔹 {t}" for t in bloques["en_progreso"]]) + "\n"
-            if bloques["sin_empezar"]:
-                mensaje += "  💤 *Sin empezar:*\n" + "\n".join([f"    🔹 {t}" for t in bloques["sin_empezar"]]) + "\n"
-            mensaje += "\n"
-        bot.reply_to(message, mensaje, parse_mode="Markdown")
-        return
-
-    # 2. Consulta de tareas individuales
-    if any(x in texto for x in ["mis tareas", "que tengo que hacer", "que tareas tengo"]):
-        pendientes = obtener_pendientes_notion()
-        bloques = pendientes.get(persona_remitente)
-        if not bloques or (not bloques["sin_empezar"] and not bloques["en_progreso"]):
-            bot.reply_to(message, f"Estás al día, {persona_remitente}. Excelente labor.")
-            return
-        mensaje = f"📝 *Tareas pendientes para {persona_remitente}:*\n\n"
-        if bloques["en_progreso"]:
-            mensaje += "⏳ *EN PROGRESO:*\n" + "\n".join([f"  🔹 {t}" for t in bloques["en_progreso"]]) + "\n\n"
-        if bloques["sin_empezar"]:
-            mensaje += "💤 *SIN EMPEZAR:*\n" + "\n".join([f"  🔹 {t}" for t in bloques["sin_empezar"]]) + "\n\n"
-        bot.reply_to(message, mensaje, parse_mode="Markdown")
-        return
-
-    # 3. Procesar solicitudes de avance por texto
-    if procesar_cambio_estado(texto, persona_remitente, message, usar_audio=False):
-        return
-
-    # 4. Restricción de creación
-    if persona_remitente not in ["Emi", "Delfi"]:
-        bot.reply_to(message, "Acceso de administración denegado. Solo Emiliano y Delfi pueden reescribir la base de datos.")
-        return
-
-    # Gemini procesa texto (Consultas técnicas, creativas o formatos de tareas)
-    try:
-        respuesta_ai = consultar_gemini(message.text, persona_remitente)
-        if respuesta_ai.startswith("NOTION|"):
-            partes = respuesta_ai.split("|")
-            tarea, persona, plazo_raw, prioridad = partes[1], partes[2], partes[3], partes[4]
-            plazo = None if plazo_raw == "None" else plazo_raw
-            if agregar_tarea_notion_completa(tarea, persona, plazo, prioridad):
-                enviar_alerta_telegram(persona, tarea, plazo, prioridad)
-                bot.reply_to(message, f"Excelente. He registrado '{tarea}' para {persona} en Notion.")
-        else:
-            bot.reply_to(message, respuesta_ai)
-    except Exception as e:
-        bot.reply_to(message, f"Error en sistema de consulta: {e}")
-
-# --- SERVIDOR WEB ---
+# --- SERVIDOR WEB INTEGRADO ADAPTADO PARA LAS 10:00 AM ---
 class WebhookHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path in ["/", ""]:
@@ -604,18 +554,16 @@ class WebhookHandler(BaseHTTPRequestHandler):
             self.send_header("Content-type", "text/plain")
             self.end_headers()
             
-            # Obtener la hora de Argentina (UTC-3)
             hora_arg = datetime.datetime.utcnow() - timedelta(hours=3)
             hora_actual = hora_arg.hour
             minutos_actuales = hora_arg.minute
             
-            # El Cron-Job pasa cada 10 min. Evaluamos que sea la hora 9 (9:00 AM) y los primeros 10 min
-            if hora_actual == 9 and minutos_actuales < 11:
+            # Evaluamos que la hora de Argentina sea exactamente las 10:00 AM (Damos margen de 15 minutos)
+            if hora_actual == 10 and minutos_actuales < 16:
                 resultado = enviar_reporte_y_diagnostico_colu()
-                self.wfile.write(f"Reporte diario ejecutado: {resultado}".encode("utf-8"))
+                self.wfile.write(f"Reporte diario ejecutado a las 10 AM: {resultado}".encode("utf-8"))
             else:
-                # El resto del día, solo responde OK para mantenerse despierto sin saturarte de mensajes
-                self.wfile.write(b"Ping recibido de Cron-Job. COLU despierto y atento.")
+                self.wfile.write(b"Ping recibido en ruta de recordatorio fuera de hora. Canal atento.")
         else:
             self.send_response(404)
             self.end_headers()
