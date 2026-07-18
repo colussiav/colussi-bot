@@ -13,8 +13,6 @@ TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 NOTION_API_KEY = os.environ.get("NOTION_API_KEY")
 NOTION_DATABASE_ID = os.environ.get("NOTION_DATABASE_ID")
-ELEVENLABS_API_KEY = os.environ.get("ELEVENLABS_API_KEY")
-ELEVENLABS_VOICE_ID = os.environ.get("ELEVENLABS_VOICE_ID")
 
 # --- MAPEO DE INTEGRANTES DE COLUSSI AV ---
 TELEGRAM_IDS = {
@@ -49,37 +47,6 @@ SYSTEM_INSTRUCTION = (
     "responde de forma clara, concisa, profesional y directa en texto normal, sin incluir jamás la palabra 'NOTION' ni barras '|'."
 )
 
-def texto_a_voz_elevenlabs(texto):
-    if not ELEVENLABS_API_KEY:
-        print("Falta la API Key de ElevenLabs.")
-        return None
-        
-    # Si la variable de Render vino vacía, le clavamos un ID de voz por defecto (ej: la voz de 'Rachel' o 'Adam')
-    voice_id = ELEVENLABS_VOICE_ID if ELEVENLABS_VOICE_ID else "21m00Tcm4TlvDq8ikWAM"
-        
-    url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
-    headers = {
-        "xi-api-key": ELEVENLABS_API_KEY,
-        "Content-Type": "application/json"
-    }
-    data = {
-        "text": texto,
-        "model_id": "eleven_multilingual_v2",
-        "voice_settings": {
-            "stability": 0.5,
-            "similarity_boost": 0.75
-        }
-    }
-    try:
-        response = requests.post(url, json=data, headers=headers)
-        if response.status_code == 200:
-            return response.content
-        else:
-            print(f"Error ElevenLabs: {response.status_code} - {response.text}")
-    except Exception as e:
-        print(f"Error conexión ElevenLabs: {e}")
-    return None
-    
 # --- NOTION: AGREGAR TAREA (CORREGIDA Y ROBUSTA) ---
 def agregar_tarea_notion_completa(nombre_tarea, persona, fecha_plazo=None, prioridad="Medio"):
     url = "https://api.notion.com/v1/pages"
@@ -325,39 +292,14 @@ def handle_voice_message(message):
             plazo = None if str(plazo_raw).strip().lower() == "none" else plazo_raw
             if agregar_tarea_notion_completa(tarea, persona, plazo, prioridad):
                 enviar_alerta_telegram(persona, tarea, plazo, prioridad)
-                
-                texto_confirmacion = f"He registrado la tarea {tarea} para {persona} en Notion de forma exitosa."
-                audio_respuesta = texto_a_voz_elevenlabs(texto_confirmacion)
-                if audio_respuesta:
-                    bot.send_voice(message.chat.id, audio_respuesta, reply_to_message_id=message.message_id)
-                else:
-                    bot.reply_to(message, f"✅ He registrado la tarea '{tarea}' para {persona} en Notion.")
+                bot.reply_to(message, f"✅ He registrado la tarea '{tarea}' para {persona} en Notion.")
             else:
-                bot.reply_to(message, "❌ Hubo un problema al intentar impactar la tarea en la base de datos de Notion.")
+                bot.reply_to(message, "❌ Hubo un problema al intentar impactar la tarea en la base de datos de Notion. Revisa el mapeo de columnas.")
         else:
-            # Intentamos generar el audio
-            audio_respuesta = texto_a_voz_elevenlabs(respuesta_ai)
-            if audio_respuesta:
-                bot.send_voice(message.chat.id, audio_respuesta, reply_to_message_id=message.message_id)
-            else:
-                # SI FALLA EL AUDIO, ADEMÁS DE MANDAR EL TEXTO, EL BOT TE VA A DECIR ACÁ EL ERROR EN EL CHAT:
-                bot.reply_to(message, respuesta_ai)
-                
-                # Hacemos una petición rápida de prueba para que nos mande el código de error exacto de ElevenLabs
-                voice_id = ELEVENLABS_VOICE_ID if ELEVENLABS_VOICE_ID else "21m00Tcm4TlvDq8ikWAM"
-                try:
-                    test_res = requests.post(
-                        f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}",
-                        json={"text": "test", "model_id": "eleven_multilingual_v2"},
-                        headers={"xi-api-key": ELEVENLABS_API_KEY, "Content-Type": "application/json"}
-                    )
-                    if test_res.status_code != 200:
-                        bot.send_message(message.chat.id, f"⚠️ Alerta ElevenLabs ({test_res.status_code}): {test_res.text[:120]}")
-                except:
-                    pass
+            bot.reply_to(message, respuesta_ai)
     except Exception as e:
         print(f"Error de audio: {e}")
-        
+
 # --- RECEPTOR DE TEXTO PRINCIPAL ---
 @bot.message_handler(func=lambda message: True)
 def handle_message(message):
@@ -432,4 +374,3 @@ def run_server():
 
 threading.Thread(target=run_server, daemon=True).start()
 bot.infinity_polling()
-
