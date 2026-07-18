@@ -322,14 +322,24 @@ def handle_voice_message(message):
             plazo = None if str(plazo_raw).strip().lower() == "none" else plazo_raw
             if agregar_tarea_notion_completa(tarea, persona, plazo, prioridad):
                 enviar_alerta_telegram(persona, tarea, plazo, prioridad)
-                bot.reply_to(message, f"✅ He registrado la tarea '{tarea}' para {persona} en Notion.")
+                
+                texto_confirmacion = f"He registrado la tarea {tarea} para {persona} en Notion de forma exitosa."
+                audio_respuesta = texto_a_voz_elevenlabs(texto_confirmacion)
+                if audio_respuesta:
+                    bot.send_voice(message.chat.id, audio_respuesta, reply_to_message_id=message.message_id)
+                else:
+                    bot.reply_to(message, f"✅ He registrado la tarea '{tarea}' para {persona} en Notion.")
             else:
-                bot.reply_to(message, "❌ Hubo un problema al intentar impactar la tarea en la base de datos de Notion. Revisa el mapeo de columnas.")
+                bot.reply_to(message, "❌ Hubo un problema al intentar impactar la tarea en la base de datos de Notion.")
         else:
-            bot.reply_to(message, respuesta_ai)
+            audio_respuesta = texto_a_voz_elevenlabs(respuesta_ai)
+            if audio_respuesta:
+                bot.send_voice(message.chat.id, audio_respuesta, reply_to_message_id=message.message_id)
+            else:
+                bot.reply_to(message, respuesta_ai)
     except Exception as e:
         print(f"Error de audio: {e}")
-
+        
 # --- RECEPTOR DE TEXTO PRINCIPAL ---
 @bot.message_handler(func=lambda message: True)
 def handle_message(message):
