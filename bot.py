@@ -335,11 +335,26 @@ def handle_voice_message(message):
             else:
                 bot.reply_to(message, "❌ Hubo un problema al intentar impactar la tarea en la base de datos de Notion.")
         else:
+            # Intentamos generar el audio
             audio_respuesta = texto_a_voz_elevenlabs(respuesta_ai)
             if audio_respuesta:
                 bot.send_voice(message.chat.id, audio_respuesta, reply_to_message_id=message.message_id)
             else:
+                # SI FALLA EL AUDIO, ADEMÁS DE MANDAR EL TEXTO, EL BOT TE VA A DECIR ACÁ EL ERROR EN EL CHAT:
                 bot.reply_to(message, respuesta_ai)
+                
+                # Hacemos una petición rápida de prueba para que nos mande el código de error exacto de ElevenLabs
+                voice_id = ELEVENLABS_VOICE_ID if ELEVENLABS_VOICE_ID else "21m00Tcm4TlvDq8ikWAM"
+                try:
+                    test_res = requests.post(
+                        f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}",
+                        json={"text": "test", "model_id": "eleven_multilingual_v2"},
+                        headers={"xi-api-key": ELEVENLABS_API_KEY, "Content-Type": "application/json"}
+                    )
+                    if test_res.status_code != 200:
+                        bot.send_message(message.chat.id, f"⚠️ Alerta ElevenLabs ({test_res.status_code}): {test_res.text[:120]}")
+                except:
+                    pass
     except Exception as e:
         print(f"Error de audio: {e}")
         
