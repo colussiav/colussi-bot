@@ -125,7 +125,7 @@ def obtener_pendientes_notion():
         print(f"Error Notion Query: {e}")
         return {}
 
-# --- NOTION: ENVIAR REPORTE MATUTINO ---
+# --- NOTION: ENVIAR REPORTE MATUTINO AUTOMÁTICO (SOLO ADMIN) ---
 def enviar_reporte_matutino_automatico():
     pendientes = obtener_pendientes_notion()
     if not pendientes:
@@ -154,16 +154,13 @@ def forzar_reporte_masivo_equipo():
         except: pass
         return True
         
-    # Recorremos el mapeo de integrantes
     for persona, telegram_id in TELEGRAM_IDS.items():
         if not telegram_id: continue
         
         bloques = pendientes.get(persona)
-        # Si la persona no tiene tareas asignadas en este momento
         if not bloques or (not bloques["sin_empezar"] and not bloques["en_progreso"]):
             mensaje = f"📝 *¡Hola {persona}!* 🎬\n\nCOLU te reporta que estás al día. ¡Excelente labor! No tenés tareas pendientes en Notion."
         else:
-            # Si tiene tareas, armamos su mensaje personalizado
             mensaje = f"📝 *¡Hola {persona}!* 🎬\n\nCOLU te reporta tus tareas pendientes actuales en Notion:\n\n"
             if bloques["en_progreso"]: 
                 mensaje += "⏳ *EN PROGRESO:*\n" + "\n".join([f"  🔹 {t}" for t in bloques["en_progreso"]]) + "\n\n"
@@ -176,7 +173,6 @@ def forzar_reporte_masivo_equipo():
             print(f"No se pudo enviar el reporte individual a {persona}: {e}")
             
     return True
-    
 
 # --- NOTION: BUSCAR TAREAS COINCIDENTES ---
 def buscar_tareas_candidatas(nombre_tarea_aproximado, persona_name):
@@ -287,7 +283,7 @@ def transcribir_audio_con_gemini(audio_bytes):
 def ejecutar_comando_notion(texto, persona_remitente, message):
     texto_lower = texto.lower().strip()
     
-    # 1. COMANDO MASIVO (Va arriba de todo para que no se pise con el reporte general)
+    # 1. COMANDO MASIVO PARA TODO EL EQUIPO (Solo Emi)
     if any(x in texto_lower for x in ["enviar reporte matutino", "mandar reporte", "enviar reporte general", "reporte masivo"]):
         if persona_remitente != "Emi":
             bot.reply_to(message, "Acceso denegado. Solo Emi puede forzar el reporte del equipo.")
@@ -301,7 +297,7 @@ def ejecutar_comando_notion(texto, persona_remitente, message):
             bot.send_message(message.chat.id, "❌ Hubo un error al intentar despachar los reportes.")
         return True
 
-    # 2. REPORTE GENERAL EN UN SOLO CHAT (Para administradores)
+    # 2. REPORTE GENERAL EN UN SOLO CHAT (Admins)
     if any(x in texto_lower for x in ["reporte", "reporte general", "como venimos", "todas las tareas", "tareas tiene el equipo"]):
         if persona_remitente not in ["Emi", "Delfi"]:
             bot.reply_to(message, "Acceso denegado. No posees permisos de administración.")
@@ -310,7 +306,7 @@ def ejecutar_comando_notion(texto, persona_remitente, message):
         if not pendientes:
             bot.reply_to(message, "Excelente. No hay tareas pendientes en toda la productora.")
             return True
-        mensaje = "📋 *Estado General de Producción - Colussi AV:*\n\n"
+        mensaje = "📋 *Estado General de Production - Colussi AV:*\n\n"
         for pers, bloques in pendientes.items():
             mensaje += f"👤 *{pers}:*\n"
             if bloques["en_progreso"]: mensaje += "  ⏳ *En progreso:*\n" + "\n".join([f"    🔹 {t}" for t in bloques["en_progreso"]]) + "\n"
@@ -319,7 +315,7 @@ def ejecutar_comando_notion(texto, persona_remitente, message):
         bot.send_message(message.chat.id, mensaje, parse_mode="Markdown")
         return True
 
-    # 3. MIS TAREAS INDIVIDUALES (Para cualquier usuario que pregunte por lo suyo)
+    # 3. MIS TAREAS INDIVIDUALES (Cualquier usuario)
     if any(x in texto_lower for x in ["mis tareas", "que tengo que hacer", "que tareas tengo"]):
         pendientes = obtener_pendientes_notion()
         bloques = pendientes.get(persona_remitente)
@@ -330,25 +326,6 @@ def ejecutar_comando_notion(texto, persona_remitente, message):
         if bloques["en_progreso"]: mensaje += "⏳ *EN PROGRESO:*\n" + "\n".join([f"  🔹 {t}" for t in bloques["en_progreso"]]) + "\n\n"
         if bloques["sin_empezar"]: mensaje += "💤 *SIN EMPEZAR:*\n" + "\n".join([f"  🔹 {t}" for t in bloques["sin_empezar"]]) + "\n\n"
         bot.send_message(message.chat.id, mensaje, parse_mode="Markdown")
-        return True
-
-    if procesar_cambio_estado(texto_lower, persona_remitente, message):
-        return True
-    return False
-
-
-    # --- COMANDO PARA FORZAR EL REPORTE MATUTINO MANUALMENTE (SOLO EMI) ---
-    if any(x in texto_lower for x in ["enviar reporte matutino", "mandar reporte", "enviar reporte general"]):
-        if persona_remitente != "Emi":
-            bot.reply_to(message, "Acceso denegado. Solo Emi puede forzar el reporte general.")
-            return True
-        
-        bot.reply_to(message, "⏳ Procesando y enviando el reporte general a tu chat...")
-        exito = enviar_reporte_matutino_automatico()
-        if exito:
-            bot.send_message(message.chat.id, "✅ Reporte general enviado con éxito.")
-        else:
-            bot.send_message(message.chat.id, "❌ Hubo un error al intentar generar o enviar el reporte.")
         return True
 
     if procesar_cambio_estado(texto_lower, persona_remitente, message):
