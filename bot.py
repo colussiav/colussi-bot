@@ -35,16 +35,19 @@ except Exception as e:
 
 # --- INSTRUCCIÓN GENERAL PARA COLU ---
 SYSTEM_INSTRUCTION = (
-    "Eres 'COLU', el asistente virtual de inteligencia artificial oficial de 'Colussi Audiovisuales'. "
-    "Tu tono es profesional, de estudio sofisticado y sumamente eficiente. "
-    "Conoces a la perfección el rubro audiovisual (cámaras, iluminación, postproducción, flujos de trabajo, setups de cine). "
+    "Eres 'COLU', el asistente virtual oficial de 'Colussi Audiovisuales'. "
     "Tu misión es facilitar la gestión del estudio para Emi, Delfi, Renzo, Santi y Ari. "
-    "Responde siempre de forma clara, concisa y directa mediante texto. Ve directo al grano. "
-    "REGLA DE ORO PARA PLAZOS: Si el usuario NO menciona explícitamente un límite de tiempo, "
-    "debes colocar obligatoriamente 'None' en el campo de fecha. Queda terminantemente PROHIBIDO inventar plazos."
+    "Conoces a la perfección el rubro audiovisual (cámaras, iluminación, postproducción, flujos de trabajo).\n\n"
+    "REGLA DE FORMATO ABSOLUTA:\n"
+    "Si el usuario te solicita CREAR una tarea nueva, debes responder ÚNICA Y EXCLUSIVAMENTE con el formato estructurado, "
+    "sin saludos, sin introducciones, sin texto antes ni después. El formato debe ser exactamente:\n"
+    "NOTION|Titulo de la tarea|PersonaAsignada|YYYY-MM-DD|Prioridad\n"
+    "PersonaAsignada debe ser exactamente: Emi, Delfi, Renzo, Santi o Ari. Si no hay fecha, pon 'None'.\n\n"
+    "Si el usuario solo te está charlando o haciendo una pregunta que no requiere crear una tarea en Notion, "
+    "responde de forma clara, concisa, profesional y directa en texto normal, sin incluir jamás la palabra 'NOTION' ni barras '|'."
 )
 
-# --- NOTION: AGREGAR TAREA ---
+# --- NOTION: AGREGAR TAREA (CORREGIDA Y ROBUSTA) ---
 def agregar_tarea_notion_completa(nombre_tarea, persona, fecha_plazo=None, prioridad="Medio"):
     url = "https://api.notion.com/v1/pages"
     headers = {
@@ -61,15 +64,27 @@ def agregar_tarea_notion_completa(nombre_tarea, persona, fecha_plazo=None, prior
         "Estado": {"status": {"name": "Sin empezar"}},
         "Prioridad": {"select": {"name": prioridad}}
     }
-    if fecha_plazo and fecha_plazo != "None":
-        properties["Plazo"] = {"date": {"start": fecha_plazo}}
+    
+    # Validación estricta e inmune a mayúsculas/minúsculas para la fecha
+    if fecha_plazo and str(fecha_plazo).strip().lower() != "none" and str(fecha_plazo).strip() != "":
+        properties["Plazo"] = {"date": {"start": fecha_plazo.strip()}}
         
     data = {"parent": {"database_id": NOTION_DATABASE_ID}, "properties": properties}
     try:
         response = requests.post(url, json=data, headers=headers)
-        return response.status_code == 200
+        if response.status_code == 200:
+            return True
+        else:
+            print(f"Error de Notion API: {response.status_code} - {response.text}")
+            # Intento de rescate: Si falló por la fecha, reintentamos la carga ignorando el campo Plazo
+            if "Plazo" in properties:
+                del properties["Plazo"]
+                data_rescate = {"parent": {"database_id": NOTION_DATABASE_ID}, "properties": properties}
+                response_rescate = requests.post(url, json=data_rescate, headers=headers)
+                return response_rescate.status_code == 200
+            return False
     except Exception as e:
-        print(f"Error Notion: {e}")
+        print(f"Error de conexión con Notion: {e}")
         return False
 
 # --- NOTION: OBTENER PENDIENTES ---
@@ -154,7 +169,7 @@ def enviar_alerta_telegram(persona, nombre_tarea, fecha_plazo=None, prioridad="M
     if "presupuesto" in nombre_tarea.lower(): prioridad = "Alto"
     alerta_prioridad = "⚠️" if prioridad == "Alto" else "📌"
     mensaje = f"🤖 *¡Hola {persona}!* 🎬\n\nCOLU te reporta una nueva asignación en Notion:\n{alerta_prioridad} *{nombre_tarea}*\n▪️ *Prioridad:* {prioridad}\n"
-    if fecha_plazo and fecha_plazo != "None": 
+    if fecha_plazo and str(fecha_plazo).strip().lower() != "none" and str(fecha_plazo).strip() != "": 
         mensaje += f"📅 *Plazo de entrega:* {fecha_plazo}\n"
     try: return requests.post(url, json={"chat_id": telegram_id, "text": mensaje, "parse_mode": "Markdown"}).status_code == 200
     except: return False
@@ -172,26 +187,22 @@ def consultar_gemini(prompt_usuario, nombre_emisor):
                 "role": "user",
                 "parts": [{"text": (
                     f"{SYSTEM_INSTRUCTION}\n\n"
-                    f"Hoy es {fecha_actual_str} (Huso horario de Argentina).\n"
-                    f"Le estás respondiendo a: {nombre_emisor}.\n\n"
-                    "Formatos especiales:\n"
-                    "NOTION|Titulo de la tarea|PersonaAsignada|YYYY-MM-DD|Prioridad\n"
-                    "PersonaAsignada debe ser estrictamente el nombre de la persona a quien va la tarea: Emi, Delfi, Renzo, Santi o Ari.\n"
+                    f"Hoy es {fecha_actual_str} (Argentina).\n"
                     f"Mensaje de {nombre_emisor}: {prompt_usuario}"
                 )}]
             }
         ],
-        "generationConfig": {"temperature": 0.2}
+        "generationConfig": {"temperature": 0.1}
     }
     try:
         res = requests.post(url, json=data, headers=headers)
         if res.status_code == 200: 
             return res.json()['candidates'][0]['content']['parts'][0]['text'].strip()
     except Exception as e:
-        print(f"Error Gemini Original: {e}")
+        print(f"Error Gemini: {e}")
     return "Disculpe, Señor. Tuve un inconveniente al procesar la solicitud."
 
-# --- PROCESAMIENTO DE AUDIO ORIGINAL RESTAURADO (STT) ---
+# --- PROCESAMIENTO DE AUDIO ---
 def transcribir_audio_con_gemini(audio_bytes):
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent?key={GEMINI_API_KEY}"
     headers = {"Content-Type": "application/json"}
@@ -203,7 +214,7 @@ def transcribir_audio_con_gemini(audio_bytes):
                 "role": "user",
                 "parts": [
                     {"inline_data": {"mime_type": "audio/ogg", "data": audio_b64}},
-                    {"text": "Transcribe este audio de voz a texto de forma exacta, literal, respetando los nombres propios del español latino. Devuelve única y exclusivamente la transcripción limpia sin comentarios adicionales."}
+                    {"text": "Transcribe este audio de voz a texto de forma exacta, literal y limpia sin comentarios adicionales."}
                 ]
             }
         ],
@@ -213,7 +224,7 @@ def transcribir_audio_con_gemini(audio_bytes):
         res = requests.post(url, json=data, headers=headers)
         if res.status_code == 200: return res.json()['candidates'][0]['content']['parts'][0]['text'].strip()
     except Exception as e:
-        print(f"Error STT Original: {e}")
+        print(f"Error STT: {e}")
     return None
 
 # --- EVALUADOR DE COMANDOS DIRECTOS DE NOTION ---
@@ -272,14 +283,18 @@ def handle_voice_message(message):
         if ejecutar_comando_notion(texto_transcrito, persona_remitente, message): return
         
         respuesta_ai = consultar_gemini(texto_transcrito, persona_remitente)
-        if respuesta_ai.startswith("NOTION|"):
-            if persona_remitente not in ["Emi", "Delfi"]: return
+        if "NOTION|" in respuesta_ai:
+            if not respuesta_ai.startswith("NOTION|"):
+                respuesta_ai = "NOTION|" + respuesta_ai.split("NOTION|")[1]
+            
             partes = respuesta_ai.split("|")
             tarea, persona, plazo_raw, prioridad = partes[1], partes[2], partes[3], partes[4]
-            plazo = None if plazo_raw == "None" else plazo_raw
+            plazo = None if str(plazo_raw).strip().lower() == "none" else plazo_raw
             if agregar_tarea_notion_completa(tarea, persona, plazo, prioridad):
                 enviar_alerta_telegram(persona, tarea, plazo, prioridad)
-                bot.reply_to(message, f"✅ Entendido. He registrado la tarea '{tarea}' para {persona} en Notion.")
+                bot.reply_to(message, f"✅ He registrado la tarea '{tarea}' para {persona} en Notion.")
+            else:
+                bot.reply_to(message, "❌ Hubo un problema al intentar impactar la tarea en la base de datos de Notion. Revisa el mapeo de columnas.")
         else:
             bot.reply_to(message, respuesta_ai)
     except Exception as e:
@@ -297,16 +312,22 @@ def handle_message(message):
 
     try:
         respuesta_ai = consultar_gemini(message.text, persona_remitente)
-        if respuesta_ai.startswith("NOTION|"):
+        if "NOTION|" in respuesta_ai:
             if persona_remitente not in ["Emi", "Delfi"]:
                 bot.reply_to(message, "Acceso denegado para modificar la base de datos.")
                 return
+            
+            if not respuesta_ai.startswith("NOTION|"):
+                respuesta_ai = "NOTION|" + respuesta_ai.split("NOTION|")[1]
+                
             partes = respuesta_ai.split("|")
             tarea, persona, plazo_raw, prioridad = partes[1], partes[2], partes[3], partes[4]
-            plazo = None if plazo_raw == "None" else plazo_raw
+            plazo = None if str(plazo_raw).strip().lower() == "none" else plazo_raw
             if agregar_tarea_notion_completa(tarea, persona, plazo, prioridad):
                 enviar_alerta_telegram(persona, tarea, plazo, prioridad)
                 bot.reply_to(message, f"✅ He registrado la tarea '{tarea}' para {persona} en Notion.")
+            else:
+                bot.reply_to(message, "❌ Hubo un problema al intentar crear la tarea en Notion. Verifica que las columnas coincidan.")
         else:
             bot.reply_to(message, respuesta_ai)
     except Exception as e:
@@ -315,10 +336,10 @@ def handle_message(message):
 def procesar_cambio_estado(texto, persona_remitente, message):
     nuevo_estado = None
     if any(x in texto for x in ["empecé", "empece", "arranqué", "arranque", "progreso", "estoy con"]): nuevo_estado = "En progreso"
-    elif any(x in texto for x in ["listo", "terminé", "termine"]): nuevo_estado = "Listo"
+    elif any(x in texto for x in ["listo", "terminé", "termine", "finalizada", "finalizadas"]): nuevo_estado = "Listo"
     if not nuevo_estado: return False
     
-    filtro = texto.replace("empecé", "").replace("empece", "").replace("arranqué", "").replace("arranque", "").replace("progreso", "").replace("estoy con", "").replace("la tarea", "").replace("de", "").strip()
+    filtro = texto.replace("empecé", "").replace("empece", "").replace("arranqué", "").replace("arranque", "").replace("progreso", "").replace("estoy con", "").replace("la tarea", "").replace("de", "").replace("finalizada", "").replace("finalizadas", "").replace("lista", "").strip()
     candidatas = buscar_tareas_candidatas(filtro, persona_remitente)
     if not candidatas: return False
     
@@ -353,3 +374,4 @@ def run_server():
 
 threading.Thread(target=run_server, daemon=True).start()
 bot.infinity_polling()
+
