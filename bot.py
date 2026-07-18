@@ -47,7 +47,7 @@ SYSTEM_INSTRUCTION = (
     "responde de forma clara, concisa, profesional y directa en texto normal, sin incluir jamás la palabra 'NOTION' ni barras '|'."
 )
 
-# --- NOTION: AGREGAR TAREA (CORREGIDA Y ROBUSTA) ---
+# --- NOTION: AGREGAR TAREA ---
 def agregar_tarea_notion_completa(nombre_tarea, persona, fecha_plazo=None, prioridad="Medio"):
     url = "https://api.notion.com/v1/pages"
     headers = {
@@ -65,7 +65,6 @@ def agregar_tarea_notion_completa(nombre_tarea, persona, fecha_plazo=None, prior
         "Prioridad": {"select": {"name": prioridad}}
     }
     
-    # Validación estricta e inmune a mayúsculas/minúsculas para la fecha
     if fecha_plazo and str(fecha_plazo).strip().lower() != "none" and str(fecha_plazo).strip() != "":
         properties["Plazo"] = {"date": {"start": fecha_plazo.strip()}}
         
@@ -76,7 +75,6 @@ def agregar_tarea_notion_completa(nombre_tarea, persona, fecha_plazo=None, prior
             return True
         else:
             print(f"Error de Notion API: {response.status_code} - {response.text}")
-            # Intento de rescate: Si falló por la fecha, reintentamos la carga ignorando el campo Plazo
             if "Plazo" in properties:
                 del properties["Plazo"]
                 data_rescate = {"parent": {"database_id": NOTION_DATABASE_ID}, "properties": properties}
@@ -168,12 +166,17 @@ def buscar_tareas_candidatas(nombre_tarea_aproximado, persona_name):
         print(f"Error candidatas: {e}")
         return []
 
+# --- NOTION: APLICAR CAMBIO DE ESTADO ---
 def aplicar_estado_por_id(page_id, nuevo_estado):
     url = f"https://api.notion.com/v1/pages/{page_id}"
     headers = {"Authorization": f"Bearer {NOTION_API_KEY}", "Content-Type": "application/json", "Notion-Version": "2022-06-28"}
-    update_data = {"properties": {"Estado": {"status": {"name": "Listo" if nuevo_estado == "Listo" else "En progreso"}}}}
-    res = requests.patch(url, json=update_data, headers=headers)
-    return res.status_code == 200
+    update_data = {"properties": {"Estado": {"status": {"name": nuevo_estado}}}}
+    try:
+        res = requests.patch(url, json=update_data, headers=headers)
+        return res.status_code == 200
+    except Exception as e:
+        print(f"Error al cambiar estado en Notion: {e}")
+        return False
 
 # --- TELEGRAM: NOTIFICACIONES ---
 def notificar_cambio_a_emiliano(persona, tarea, nuevo_estado):
@@ -281,6 +284,20 @@ def ejecutar_comando_notion(texto, persona_remitente, message):
         bot.send_message(message.chat.id, mensaje, parse_mode="Markdown")
         return True
 
+    # --- COMANDO PARA FORZAR EL REPORTE MATUTINO MANUALMENTE (SOLO EMI) ---
+    if any(x in texto_lower for x in ["enviar reporte matutino", "mandar reporte", "enviar reporte general"]):
+        if persona_remitente != "Emi":
+            bot.reply_to(message, "Acceso denegado. Solo Emi puede forzar el reporte general.")
+            return True
+        
+        bot.reply_to(message, "⏳ Procesando y enviando el reporte general a tu chat...")
+        exito = enviar_reporte_matutino_automatico()
+        if exito:
+            bot.send_message(message.chat.id, "✅ Reporte general enviado con éxito.")
+        else:
+            bot.send_message(message.chat.id, "❌ Hubo un error al intentar generar o enviar el reporte.")
+        return True
+
     if procesar_cambio_estado(texto_lower, persona_remitente, message):
         return True
     return False
@@ -378,7 +395,7 @@ def procesar_cambio_estado(texto, persona_remitente, message):
         notificar_cambio_a_emiliano(persona_remitente, titulo_tarea, nuevo_estado)
     return True
 
-# --- SERVIDOR WEB CON webhook PARA REPORTES ---
+# --- SERVIDOR WEB CON WEBHOOK PARA REPORTES ---
 class WebhookHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path in ["/", ""]:
@@ -386,6 +403,23 @@ class WebhookHandler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(b"COLU Engine Online.")
         elif self.path == "/morning-report":
-            # Render va a golpear esta ruta para activar los recordatorios
             print("Activando reporte matutino desde el Webhook...")
-   
+            exito = enviar_reporte_matutino_automatico()
+            if exito:
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(b"Reporte matutino enviado correctamente.")
+            else:
+                self.send_response(500)
+                self.end_headers()
+                self.wfile.write(b"Error al procesar el reporte.")
+        else:
+            self.send_response(404)
+            self.end_headers()
+
+def run_server():
+    port = int(os.environ.get("PORT", 10000))
+    HTTPServer(("0.0.0.0", port), WebhookHandler).serve_forever()
+
+threading.Thread(target=run_server, daemon=True).start()
+bot.infinity_polling()
