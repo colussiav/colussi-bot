@@ -49,6 +49,34 @@ SYSTEM_INSTRUCTION = (
     "responde de forma clara, concisa, profesional y directa en texto normal, sin incluir jamás la palabra 'NOTION' ni barras '|'."
 )
 
+def texto_a_voz_elevenlabs(texto):
+    if not ELEVENLABS_API_KEY:
+        print("Falta la API Key de ElevenLabs.")
+        return None
+        
+    url = f"https://api.elevenlabs.io/v1/text-to-speech/{ELEVENLABS_VOICE_ID}"
+    headers = {
+        "xi-api-key": ELEVENLABS_API_KEY,
+        "Content-Type": "application/json"
+    }
+    data = {
+        "text": texto,
+        "model_id": "eleven_multilingual_v2",
+        "voice_settings": {
+            "stability": 0.5,
+            "similarity_boost": 0.75
+        }
+    }
+    try:
+        response = requests.post(url, json=data, headers=headers)
+        if response.status_code == 200:
+            return response.content
+        else:
+            print(f"Error ElevenLabs: {response.status_code} - {response.text}")
+    except Exception as e:
+        print(f"Error conexión ElevenLabs: {e}")
+    return None
+    
 # --- NOTION: AGREGAR TAREA (CORREGIDA Y ROBUSTA) ---
 def agregar_tarea_notion_completa(nombre_tarea, persona, fecha_plazo=None, prioridad="Medio"):
     url = "https://api.notion.com/v1/pages"
