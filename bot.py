@@ -54,7 +54,10 @@ def texto_a_voz_elevenlabs(texto):
         print("Falta la API Key de ElevenLabs.")
         return None
         
-    url = f"https://api.elevenlabs.io/v1/text-to-speech/{ELEVENLABS_VOICE_ID}"
+    # Si la variable de Render vino vacía, le clavamos un ID de voz por defecto (ej: la voz de 'Rachel' o 'Adam')
+    voice_id = ELEVENLABS_VOICE_ID if ELEVENLABS_VOICE_ID else "21m00Tcm4TlvDq8ikWAM"
+        
+    url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
     headers = {
         "xi-api-key": ELEVENLABS_API_KEY,
         "Content-Type": "application/json"
