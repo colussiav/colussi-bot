@@ -127,6 +127,27 @@ def obtener_pendientes_notion():
         print(f"Error Notion Query: {e}")
         return {}
 
+# --- NOTION: ENVIAR REPORTE MATUTINO ---
+def enviar_reporte_matutino_automatico():
+    pendientes = obtener_pendientes_notion()
+    if not pendientes:
+        try: bot.send_message(ADMIN_TELEGRAM_ID, "🌅 *¡Buen día Emi!* Todo al día. No hay tareas pendientes en la productora.")
+        except: pass
+        return True
+        
+    mensaje = "🌅 *COLU - Reporte Matutino General:*\n\n"
+    for pers, bloques in pendientes.items():
+        mensaje += f"👤 *{pers}:*\n"
+        if bloques["en_progreso"]: mensaje += "  ⏳ *En progreso:*\n" + "\n".join([f"    🔹 {t}" for t in bloques["en_progreso"]]) + "\n"
+        if bloques["sin_empezar"]: mensaje += "  💤 *Sin empezar:*\n" + "\n".join([f"    🔹 {t}" for t in bloques["sin_empezar"]]) + "\n"
+        mensaje += "\n"
+    try:
+        bot.send_message(ADMIN_TELEGRAM_ID, mensaje, parse_mode="Markdown")
+        return True
+    except Exception as e:
+        print(f"Error enviando reporte matutino: {e}")
+        return False
+
 # --- NOTION: BUSCAR TAREAS COINCIDENTES ---
 def buscar_tareas_candidatas(nombre_tarea_aproximado, persona_name):
     url = f"https://api.notion.com/v1/databases/{NOTION_DATABASE_ID}/query"
@@ -150,7 +171,7 @@ def buscar_tareas_candidatas(nombre_tarea_aproximado, persona_name):
 def aplicar_estado_por_id(page_id, nuevo_estado):
     url = f"https://api.notion.com/v1/pages/{page_id}"
     headers = {"Authorization": f"Bearer {NOTION_API_KEY}", "Content-Type": "application/json", "Notion-Version": "2022-06-28"}
-    update_data = {"properties": {"Estado": {"status": {"name": nuevo_estado}}}}
+    update_data = {"properties": {"Estado": {"status": {"name": "Listo" if nuevo_estado == "Listo" else "En progreso"}}}}
     res = requests.patch(url, json=update_data, headers=headers)
     return res.status_code == 200
 
@@ -357,20 +378,14 @@ def procesar_cambio_estado(texto, persona_remitente, message):
         notificar_cambio_a_emiliano(persona_remitente, titulo_tarea, nuevo_estado)
     return True
 
-# --- SERVIDOR WEB ---
+# --- SERVIDOR WEB CON webhook PARA REPORTES ---
 class WebhookHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path in ["/", ""]:
             self.send_response(200)
             self.end_headers()
             self.wfile.write(b"COLU Engine Online.")
-        else:
-            self.send_response(404)
-            self.end_headers()
-
-def run_server():
-    port = int(os.environ.get("PORT", 10000))
-    HTTPServer(("0.0.0.0", port), WebhookHandler).serve_forever()
-
-threading.Thread(target=run_server, daemon=True).start()
-bot.infinity_polling()
+        elif self.path == "/morning-report":
+            # Render va a golpear esta ruta para activar los recordatorios
+            print("Activando reporte matutino desde el Webhook...")
+   
