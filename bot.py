@@ -356,13 +356,62 @@ def manejar_menu_tareas(call):
 
     if call.data == "menu_finalizar":
         bot.answer_callback_query(call.id, "Buscando tareas en progreso...")
-        # TODO: Próximo paso - Desplegar la lista de tareas 'En progreso' como botones para pasar a 'Listo'
-        bot.send_message(call.message.chat.id, f"⚡ Próximamente verás acá tus tareas en progreso, {persona_remitente}.")
+        # TODO: Siguiente paso - Lógica para finalizar tareas en progreso
+        bot.send_message(call.message.chat.id, f"⏳ Próximamente verás acá tus tareas en progreso, {persona_remitente}.")
         
     elif call.data == "menu_empezar":
-        bot.answer_callback_query(call.id, "Buscando tareas sin empezar...")
-        # TODO: Próximo paso - Desplegar la lista de tareas 'Sin empezar' como botones para ver Drive/Ficha técnica
-        bot.send_message(call.message.chat.id, f"🎬 Próximamente verás acá tus tareas sin empezar, {persona_remitente}.")
+        bot.answer_callback_query(call.id, "Consultando Notion...")
+        
+        # Hacemos una consulta directa a Notion para traer solo las tareas "Sin empezar" de este usuario
+        url = f"https://api.notion.com/v1/databases/{NOTION_DATABASE_ID}/query"
+        headers = {
+            "Authorization": f"Bearer {NOTION_API_KEY}",
+            "Content-Type": "application/json",
+            "Notion-Version": "2022-06-28"
+        }
+        filter_data = {
+            "filter": {
+                "and": [
+                    {"property": "Asignado", "select": {"equals": persona_remitente}},
+                    {"property": "Estado", "status": {"equals": "Sin empezar"}}
+                ]
+            }
+        }
+        
+        try:
+            response = requests.post(url, json=filter_data, headers=headers)
+            if response.status_code != 200:
+                bot.send_message(call.message.chat.id, "❌ Error al conectar con Notion.")
+                return
+                
+            resultados = response.json().get("results", [])
+            if not resultados:
+                bot.send_message(call.message.chat.id, "🎉 No tenés tareas asignadas 'Sin empezar' en este momento.")
+                return
+                
+            # Armamos el teclado de botones individuales
+            markup = telebot.types.InlineKeyboardMarkup(row_width=1)
+            
+            for pagina in resultados:
+                page_id = pagina.get("id")
+                titulo_data = pagina.get("properties", {}).get("Nombre de la tarea", {}).get("title", [])
+                titulo = titulo_data[0].get("text", {}).get("content", "Tarea sin nombre") if titulo_data else "Tarea sin nombre"
+                
+                # Guardamos en callback_data una referencia clara: el prefijo 'emp_' seguido del ID abreviado de la tarea
+                # Telegram limita el callback_data a 64 bytes, por lo que usamos los primeros 20 caracteres del ID
+                callback_data = f"emp_{page_id[:20]}"
+                markup.add(telebot.types.InlineKeyboardButton(titulo, callback_data=callback_data))
+                
+            bot.send_message(
+                call.message.chat.id, 
+                f"🎬 *{persona_remitente}*, seleccioná qué tarea vas a empezar a realizar:", 
+                parse_mode="Markdown", 
+                reply_markup=markup
+            )
+            
+        except Exception as e:
+            print(f"Error al desplegar menú empezar: {e}")
+            bot.send_message(call.message.chat.id, "❌ Ocurrió un inconveniente al procesar tus tareas.")
 
 # --- RECEPTOR DE NOTAS DE VOZ ---
 @bot.message_handler(content_types=['voice'])
