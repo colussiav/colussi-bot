@@ -143,7 +143,7 @@ def enviar_reporte_matutino_automatico():
         bot.send_message(ADMIN_TELEGRAM_ID, mensaje, parse_mode="Markdown")
         return True
     except Exception as e:
-        print(f"Error enviando reporte matutino: {e}")
+        print(f"Error sending morning report: {e}")
         return False
         
 # --- NOTION: ENVIAR REPORTE PERSONALIZADO A CADA INTEGRANTE ---
@@ -328,10 +328,8 @@ def ejecutar_comando_notion(texto, persona_remitente, message):
         if bloques["en_progreso"]: mensaje += "⏳ *EN PROGRESO:*\n" + "\n".join([f"  🔹 {t}" for t in bloques["en_progreso"]]) + "\n\n"
         if bloques["sin_empezar"]: mensaje += "💤 *SIN EMPEZAR:*\n" + "\n".join([f"  🔹 {t}" for t in bloques["sin_empezar"]]) + "\n\n"
         
-        # Estructuramos el menú con los botones apilados verticalmente (row_width=1)
+        # Menú con los botones apilados verticalmente (row_width=1)
         markup = telebot.types.InlineKeyboardMarkup(row_width=1)
-        
-        # Agregamos los botones en filas individuales para que queden uno arriba del otro
         markup.add(
             telebot.types.InlineKeyboardButton("✅ Finalizar tarea", callback_data="menu_finalizar"),
             telebot.types.InlineKeyboardButton("⚡ Empezar tarea", callback_data="menu_empezar")
@@ -344,7 +342,7 @@ def ejecutar_comando_notion(texto, persona_remitente, message):
         return True
     return False
 
-# --- CAPTURADOR DE BOTONES INTERACTIVOS (CALLBACK QUERIES) ---
+# --- CAPTURADOR DE BOTONES INTERACTIVOS MENÚ PRINCIPAL ---
 @bot.callback_query_handler(func=lambda call: call.data in ["menu_finalizar", "menu_empezar"])
 def manejar_menu_tareas(call):
     usuario_id = call.from_user.id
@@ -362,7 +360,6 @@ def manejar_menu_tareas(call):
     elif call.data == "menu_empezar":
         bot.answer_callback_query(call.id, "Consultando Notion...")
         
-        # Hacemos una consulta directa a Notion para traer solo las tareas "Sin empezar" de este usuario
         url = f"https://api.notion.com/v1/databases/{NOTION_DATABASE_ID}/query"
         headers = {
             "Authorization": f"Bearer {NOTION_API_KEY}",
@@ -389,16 +386,12 @@ def manejar_menu_tareas(call):
                 bot.send_message(call.message.chat.id, "🎉 No tenés tareas asignadas 'Sin empezar' en este momento.")
                 return
                 
-            # Armamos el teclado de botones individuales
             markup = telebot.types.InlineKeyboardMarkup(row_width=1)
-            
             for pagina in resultados:
                 page_id = pagina.get("id")
                 titulo_data = pagina.get("properties", {}).get("Nombre de la tarea", {}).get("title", [])
                 titulo = titulo_data[0].get("text", {}).get("content", "Tarea sin nombre") if titulo_data else "Tarea sin nombre"
                 
-                # Guardamos en callback_data una referencia clara: el prefijo 'emp_' seguido del ID abreviado de la tarea
-                # Telegram limita el callback_data a 64 bytes, por lo que usamos los primeros 20 caracteres del ID
                 callback_data = f"emp_{page_id[:20]}"
                 markup.add(telebot.types.InlineKeyboardButton(titulo, callback_data=callback_data))
                 
@@ -412,6 +405,70 @@ def manejar_menu_tareas(call):
         except Exception as e:
             print(f"Error al desplegar menú empezar: {e}")
             bot.send_message(call.message.chat.id, "❌ Ocurrió un inconveniente al procesar tus tareas.")
+
+# --- CAPTURADOR PARA CUANDO SE SELECCIONA UNA TAREA ESPECÍFICA ---
+@bot.callback_query_handler(func=lambda call: call.data.startswith("emp_"))
+def manejar_seleccion_tarea(call):
+    usuario_id = call.from_user.id
+    persona_remitente = next((k for k, v in TELEGRAM_IDS.items() if v and int(v) == usuario_id), None)
+    
+    if not persona_remitente:
+        bot.answer_callback_query(call.id, "No estás registrado.")
+        return
+
+    bot.answer_callback_query(call.id, "Cargando detalles de la tarea...")
+    id_truncado = call.data.replace("emp_", "")
+
+    url = f"https://api.notion.com/v1/databases/{NOTION_DATABASE_ID}/query"
+    headers = {
+        "Authorization": f"Bearer {NOTION_API_KEY}",
+        "Content-Type": "application/json",
+        "Notion-Version": "2022-06-28"
+    }
+    
+    try:
+        response = requests.post(url, headers=headers)
+        if response.status_code != 200:
+            bot.send_message(call.message.chat.id, "❌ Error al conectar con Notion para leer la tarea.")
+            return
+
+        resultados = response.json().get("results", [])
+        pagina_encontrada = None
+        for pagina in resultados:
+            if pagina.get("id", "").startswith(id_truncado):
+                pagina_encontrada = pagina
+                break
+
+        if not pagina_encontrada:
+            bot.send_message(call.message.chat.id, "❌ No se encontró la tarea seleccionada en Notion.")
+            return
+
+        propiedades = pagina_encontrada.get("properties", {})
+        titulo_data = propiedades.get("Nombre de la tarea", {}).get("title", [])
+        titulo_tarea = titulo_data[0].get("text", {}).get("content", "Tarea sin nombre") if titulo_data else "Tarea sin nombre"
+
+        # Extracción del Link de la columna "Adjuntar archivo"
+        archivos_data = propiedades.get("Adjuntar archivo", {}).get("files", [])
+        link_drive = None
+        if archivos_data:
+            link_drive = archivos_data[0].get("external", {}).get("url") or archivos_data[0].get("file", {}).get("url")
+
+        # Extracción inicial de la Descripción vacía para posterior lectura interna
+        descripcion = ""
+        
+        mensaje_detalle = f"📋 *FICHA DE TAREA*\n\n📌 *Título:* {titulo_tarea}\n"
+        if descripcion:
+            mensaje_detalle += f"📝 *Descripción:* {descripcion}\n"
+        if link_drive:
+            mensaje_detalle += f"🔗 *Material (Drive):* [Abrir enlace]({link_drive})\n"
+        if not descripcion and not link_drive:
+            mensaje_detalle += f"\nℹ️ _Esta tarea no incluye descripción adicional ni archivos adjuntos._\n"
+
+        bot.send_message(call.message.chat.id, mensaje_detalle, parse_mode="Markdown", disable_web_page_preview=True)
+
+    except Exception as e:
+        print(f"Error al leer detalles de tarea: {e}")
+        bot.send_message(call.message.chat.id, "❌ Ocurrió un error al obtener los detalles de la tarea.")
 
 # --- RECEPTOR DE NOTAS DE VOZ ---
 @bot.message_handler(content_types=['voice'])
