@@ -352,62 +352,58 @@ def manejar_menu_tareas(call):
         bot.answer_callback_query(call.id, "No estás registrado en el sistema.")
         return
 
-    if call.data == "menu_finalizar":
-        bot.answer_callback_query(call.id, "Buscando tareas en progreso...")
-        # TODO: Siguiente paso - Lógica para finalizar tareas en progreso
-        bot.send_message(call.message.chat.id, f"⏳ Próximamente verás acá tus tareas en progreso, {persona_remitente}.")
-        
-    elif call.data == "menu_empezar":
-        bot.answer_callback_query(call.id, "Consultando Notion...")
-        
-        url = f"https://api.notion.com/v1/databases/{NOTION_DATABASE_ID}/query"
-        headers = {
-            "Authorization": f"Bearer {NOTION_API_KEY}",
-            "Content-Type": "application/json",
-            "Notion-Version": "2022-06-28"
-        }
-        filter_data = {
-            "filter": {
-                "and": [
-                    {"property": "Asignado", "select": {"equals": persona_remitente}},
-                    {"property": "Estado", "status": {"equals": "Sin empezar"}}
-                ]
-            }
-        }
-        
-        try:
-            response = requests.post(url, json=filter_data, headers=headers)
-            if response.status_code != 200:
-                bot.send_message(call.message.chat.id, "❌ Error al conectar con Notion.")
-                return
-                
-            resultados = response.json().get("results", [])
-            if not resultados:
-                bot.send_message(call.message.chat.id, "🎉 No tenés tareas asignadas 'Sin empezar' en este momento.")
-                return
-                
-            markup = telebot.types.InlineKeyboardMarkup(row_width=1)
-            for pagina in resultados:
-                page_id = pagina.get("id")
-                titulo_data = pagina.get("properties", {}).get("Nombre de la tarea", {}).get("title", [])
-                titulo = titulo_data[0].get("text", {}).get("content", "Tarea sin nombre") if titulo_data else "Tarea sin nombre"
-                
-                callback_data = f"emp_{page_id[:20]}"
-                markup.add(telebot.types.InlineKeyboardButton(titulo, callback_data=callback_data))
-                
-            bot.send_message(
-                call.message.chat.id, 
-                f"🎬 *{persona_remitente}*, seleccioná qué tarea vas a empezar a realizar:", 
-                parse_mode="Markdown", 
-                reply_markup=markup
-            )
-            
-        except Exception as e:
-            print(f"Error al desplegar menú empezar: {e}")
-            bot.send_message(call.message.chat.id, "❌ Ocurrió un inconveniente al procesar tus tareas.")
+    estado_buscado = "En progreso" if call.data == "menu_finalizar" else "Sin empezar"
+    emoji_accion = "⏳" if call.data == "menu_finalizar" else "🎬"
+    prefijo_callback = "fin_" if call.data == "menu_finalizar" else "emp_"
+    texto_cons = "Buscando tareas en progreso..." if call.data == "menu_finalizar" else "Consultando Notion..."
 
-# --- CAPTURADOR PARA CUANDO SE SELECCIONA UNA TAREA ESPECÍFICA ---
-@bot.callback_query_handler(func=lambda call: call.data.startswith("emp_"))
+    bot.answer_callback_query(call.id, texto_cons)
+    
+    url = f"https://api.notion.com/v1/databases/{NOTION_DATABASE_ID}/query"
+    headers = {
+        "Authorization": f"Bearer {NOTION_API_KEY}",
+        "Content-Type": "application/json",
+        "Notion-Version": "2022-06-28"
+    }
+    filter_data = {
+        "filter": {
+            "and": [
+                {"property": "Asignado", "select": {"equals": persona_remitente}},
+                {"property": "Estado", "status": {"equals": estado_buscado}}
+            ]
+        }
+    }
+    
+    try:
+        response = requests.post(url, json=filter_data, headers=headers)
+        if response.status_code != 200:
+            bot.send_message(call.message.chat.id, "❌ Error al conectar con Notion.")
+            return
+            
+        resultados = response.json().get("results", [])
+        if not resultados:
+            msg_vacio = "No tenés tareas 'En progreso' para finalizar." if call.data == "menu_finalizar" else "No tenés tareas asignadas 'Sin empezar' en este momento."
+            bot.send_message(call.message.chat.id, f"🎉 {msg_vacio}")
+            return
+            
+        markup = telebot.types.InlineKeyboardMarkup(row_width=1)
+        for pagina in resultados:
+            page_id = pagina.get("id")
+            titulo_data = pagina.get("properties", {}).get("Nombre de la tarea", {}).get("title", [])
+            titulo = titulo_data[0].get("text", {}).get("content", "Tarea sin nombre") if titulo_data else "Tarea sin nombre"
+            
+            callback_data = f"{prefijo_callback}{page_id[:20]}"
+            markup.add(telebot.types.InlineKeyboardButton(titulo, callback_data=callback_data))
+            
+        texto_instruccion = f"{emoji_accion} *{persona_remitente}*, seleccioná qué tarea vas a marcar como completada:" if call.data == "menu_finalizar" else f"🎬 *{persona_remitente}*, seleccioná qué tarea vas a ver:"
+        bot.send_message(call.message.chat.id, texto_instruccion, parse_mode="Markdown", reply_markup=markup)
+        
+    except Exception as e:
+        print(f"Error al desplegar menú de tareas: {e}")
+        bot.send_message(call.message.chat.id, "❌ Ocurrió un inconveniente al procesar tus tareas.")
+
+# --- CAPTURADOR PARA CUANDO SE SELECCIONA UNA TAREA ESPECÍFICA, ACTIVACIÓN O FINALIZACIÓN ---
+@bot.callback_query_handler(func=lambda call: call.data.startswith("emp_") or call.data.startswith("fin_") or call.data.startswith("act_"))
 def manejar_seleccion_tarea(call):
     usuario_id = call.from_user.id
     persona_remitente = next((k for k, v in TELEGRAM_IDS.items() if v and int(v) == usuario_id), None)
@@ -416,9 +412,9 @@ def manejar_seleccion_tarea(call):
         bot.answer_callback_query(call.id, "No estás registrado.")
         return
 
-    bot.answer_callback_query(call.id, "Cargando detalles de la tarea...")
-    id_truncado = call.data.replace("emp_", "")
-
+    # Detectamos el tipo de acción
+    id_truncado = call.data.replace("fin_", "").replace("emp_", "").replace("act_", "")
+    
     url = f"https://api.notion.com/v1/databases/{NOTION_DATABASE_ID}/query"
     headers = {
         "Authorization": f"Bearer {NOTION_API_KEY}",
@@ -427,48 +423,78 @@ def manejar_seleccion_tarea(call):
     }
     
     try:
+        # 1. CASO: ACTIVACIÓN REAL (Pasar a En progreso desde el botón interno)
+        if call.data.startswith("act_"):
+            bot.answer_callback_query(call.id, "Iniciando tarea en Notion...")
+            response = requests.post(url, headers=headers)
+            resultados = response.json().get("results", [])
+            pagina_encontrada = next((p for p in resultados if p.get("id", "").startswith(id_truncado)), None)
+            
+            if pagina_encontrada:
+                page_id_real = pagina_encontrada.get("id")
+                titulo_data = pagina_encontrada.get("properties", {}).get("Nombre de la tarea", {}).get("title", [])
+                titulo_tarea = titulo_data[0].get("text", {}).get("content", "Tarea sin nombre") if titulo_data else "Tarea sin nombre"
+                
+                if aplicar_estado_por_id(page_id_real, "En progreso"):
+                    bot.send_message(call.message.chat.id, f"🚀 ¡Tarea *'{titulo_tarea}'* pasada a *En progreso*! A darle átomos. 🎬")
+                    notificar_cambio_a_emiliano(persona_remitente, titulo_tarea, "En progreso")
+                else:
+                    bot.send_message(call.message.chat.id, "❌ No se pudo cambiar el estado en Notion.")
+            return
+
+        # 2. CASOS: LEER FICHA O FINALIZAR TAREA
+        bot.answer_callback_query(call.id, "Buscando datos en Notion...")
         response = requests.post(url, headers=headers)
         if response.status_code != 200:
-            bot.send_message(call.message.chat.id, "❌ Error al conectar con Notion para leer la tarea.")
+            bot.send_message(call.message.chat.id, "❌ Error al conectar con Notion.")
             return
 
         resultados = response.json().get("results", [])
-        pagina_encontrada = None
-        for pagina in resultados:
-            if pagina.get("id", "").startswith(id_truncado):
-                pagina_encontrada = pagina
-                break
+        pagina_encontrada = next((p for p in resultados if p.get("id", "").startswith(id_truncado)), None)
 
         if not pagina_encontrada:
             bot.send_message(call.message.chat.id, "❌ No se encontró la tarea seleccionada en Notion.")
             return
 
+        page_id_real = pagina_encontrada.get("id")
         propiedades = pagina_encontrada.get("properties", {})
         titulo_data = propiedades.get("Nombre de la tarea", {}).get("title", [])
         titulo_tarea = titulo_data[0].get("text", {}).get("content", "Tarea sin nombre") if titulo_data else "Tarea sin nombre"
 
-        # Extracción del Link de la columna "Adjuntar archivo"
-        archivos_data = propiedades.get("Adjuntar archivo", {}).get("files", [])
-        link_drive = None
-        if archivos_data:
-            link_drive = archivos_data[0].get("external", {}).get("url") or archivos_data[0].get("file", {}).get("url")
-
-        # Extracción inicial de la Descripción vacía para posterior lectura interna
-        descripcion = ""
+        if call.data.startswith("fin_"):
+            # FLUJO: Pasar a "Listo"
+            if aplicar_estado_por_id(page_id_real, "Listo"):
+                bot.send_message(call.message.chat.id, f"🎉 ¡Excelente! La tarea *'{titulo_tarea}'* ha sido marcada como *Listo* en Notion.", parse_mode="Markdown")
+                notificar_cambio_a_emiliano(persona_remitente, titulo_tarea, "Listo")
+            else:
+                bot.send_message(call.message.chat.id, "❌ No se pudo cambiar el estado a Listo.")
         
-        mensaje_detalle = f"📋 *FICHA DE TAREA*\n\n📌 *Título:* {titulo_tarea}\n"
-        if descripcion:
-            mensaje_detalle += f"📝 *Descripción:* {descripcion}\n"
-        if link_drive:
-            mensaje_detalle += f"🔗 *Material (Drive):* [Abrir enlace]({link_drive})\n"
-        if not descripcion and not link_drive:
-            mensaje_detalle += f"\nℹ️ _Esta tarea no incluye descripción adicional ni archivos adjuntos._\n"
+        elif call.data.startswith("emp_"):
+            # FLUJO: Solo leer información (Vista previa) sin cambiar estado
+            archivos_data = propiedades.get("Adjuntar archivo", {}).get("files", [])
+            link_drive = None
+            if archivos_data:
+                link_drive = archivos_data[0].get("external", {}).get("url") or archivos_data[0].get("file", {}).get("url")
 
-        bot.send_message(call.message.chat.id, mensaje_detalle, parse_mode="Markdown", disable_web_page_preview=True)
+            descripcion = ""
+            
+            mensaje_detalle = f"📋 *FICHA DE VISTA PREVIA*\n\n📌 *Título:* {titulo_tarea}\n"
+            if descripcion:
+                mensaje_detalle += f"📝 *Descripción:* {descripcion}\n"
+            if link_drive:
+                mensaje_detalle += f"🔗 *Material (Drive):* [Abrir enlace]({link_drive})\n"
+            if not descripcion and not link_drive:
+                mensaje_detalle += f"\nℹ️ _Esta tarea no incluye descripción adicional ni archivos adjuntos._\n"
+
+            # Creamos el botón final de confirmación para pasar a "En progreso"
+            markup_arrancar = telebot.types.InlineKeyboardMarkup(row_width=1)
+            markup_arrancar.add(telebot.types.InlineKeyboardButton("🚀 Empezar esta tarea", callback_data=f"act_{id_truncado}"))
+
+            bot.send_message(call.message.chat.id, mensaje_detalle, parse_mode="Markdown", disable_web_page_preview=True, reply_markup=markup_arrancar)
 
     except Exception as e:
-        print(f"Error al leer detalles de tarea: {e}")
-        bot.send_message(call.message.chat.id, "❌ Ocurrió un error al obtener los detalles de la tarea.")
+        print(f"Error en la selección de tarea: {e}")
+        bot.send_message(call.message.chat.id, "❌ Ocurrió un error al procesar la solicitud.")
 
 # --- RECEPTOR DE NOTAS DE VOZ ---
 @bot.message_handler(content_types=['voice'])
