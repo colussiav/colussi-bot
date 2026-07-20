@@ -136,8 +136,8 @@ def enviar_reporte_matutino_automatico():
     mensaje = "🌅 *COLU - Reporte Matutino General:*\n\n"
     for pers, bloques in pendientes.items():
         mensaje += f"👤 *{pers}:*\n"
-        if bloques["en_progreso"]: mensaje += "  ⏳ *En progreso:*\n" + "\n".join([f"    🔹 {t}" for t in bloques["en_progreso"]]) + "\n"
-        if bloques["sin_empezar"]: mensaje += "  💤 *Sin empezar:*\n" + "\n".join([f"    🔹 {t}" for t in bloques["sin_empezar"]]) + "\n"
+        if bloques["en_progreso"]: mensaje += "   ⏳ *En progreso:*\n" + "\n".join([f"     🔹 {t}" for t in bloques["en_progreso"]]) + "\n"
+        if bloques["sin_empezar"]: mensaje += "   💤 *Sin empezar:*\n" + "\n".join([f"     🔹 {t}" for t in bloques["sin_empezar"]]) + "\n"
         mensaje += "\n"
     try:
         bot.send_message(ADMIN_TELEGRAM_ID, mensaje, parse_mode="Markdown")
@@ -309,28 +309,60 @@ def ejecutar_comando_notion(texto, persona_remitente, message):
         mensaje = "📋 *Estado General de Production - Colussi AV:*\n\n"
         for pers, bloques in pendientes.items():
             mensaje += f"👤 *{pers}:*\n"
-            if bloques["en_progreso"]: mensaje += "  ⏳ *En progreso:*\n" + "\n".join([f"    🔹 {t}" for t in bloques["en_progreso"]]) + "\n"
-            if bloques["sin_empezar"]: mensaje += "  💤 *Sin empezar:*\n" + "\n".join([f"    🔹 {t}" for t in bloques["sin_empezar"]]) + "\n"
+            if bloques["en_progreso"]: mensaje += "   ⏳ *En progreso:*\n" + "\n".join([f"     🔹 {t}" for t in bloques["en_progreso"]]) + "\n"
+            if bloques["sin_empezar"]: mensaje += "   💤 *Sin empezar:*\n" + "\n".join([f"     🔹 {t}" for t in bloques["sin_empezar"]]) + "\n"
             mensaje += "\n"
         bot.send_message(message.chat.id, mensaje, parse_mode="Markdown")
         return True
 
-    # 3. MIS TAREAS INDIVIDUALES (Cualquier usuario)
+    # 3. MIS TAREAS INDIVIDUALES CON MENÚ DE BOTONES INTERACTIVOS (Uno arriba del otro)
     if any(x in texto_lower for x in ["mis tareas", "que tengo que hacer", "que tareas tengo"]):
         pendientes = obtener_pendientes_notion()
         bloques = pendientes.get(persona_remitente)
+        
         if not bloques or (not bloques["sin_empezar"] and not bloques["en_progreso"]):
             bot.reply_to(message, f"¡Estás al día, {persona_remitente}! Excelente labor.")
             return True
+            
         mensaje = f"📝 *Tareas pendientes para {persona_remitente}:*\n\n"
         if bloques["en_progreso"]: mensaje += "⏳ *EN PROGRESO:*\n" + "\n".join([f"  🔹 {t}" for t in bloques["en_progreso"]]) + "\n\n"
         if bloques["sin_empezar"]: mensaje += "💤 *SIN EMPEZAR:*\n" + "\n".join([f"  🔹 {t}" for t in bloques["sin_empezar"]]) + "\n\n"
-        bot.send_message(message.chat.id, mensaje, parse_mode="Markdown")
+        
+        # Estructuramos el menú con los botones apilados verticalmente (row_width=1)
+        markup = telebot.types.InlineKeyboardMarkup(row_width=1)
+        
+        # Agregamos los botones en filas individuales para que queden uno arriba del otro
+        markup.add(
+            telebot.types.InlineKeyboardButton("✅ Finalizar tarea", callback_data="menu_finalizar"),
+            telebot.types.InlineKeyboardButton("⚡ Empezar tarea", callback_data="menu_empezar")
+        )
+        
+        bot.send_message(message.chat.id, mensaje, parse_mode="Markdown", reply_markup=markup)
         return True
 
     if procesar_cambio_estado(texto_lower, persona_remitente, message):
         return True
     return False
+
+# --- CAPTURADOR DE BOTONES INTERACTIVOS (CALLBACK QUERIES) ---
+@bot.callback_query_handler(func=lambda call: call.data in ["menu_finalizar", "menu_empezar"])
+def manejar_menu_tareas(call):
+    usuario_id = call.from_user.id
+    persona_remitente = next((k for k, v in TELEGRAM_IDS.items() if v and int(v) == usuario_id), None)
+    
+    if not persona_remitente:
+        bot.answer_callback_query(call.id, "No estás registrado en el sistema.")
+        return
+
+    if call.data == "menu_finalizar":
+        bot.answer_callback_query(call.id, "Buscando tareas en progreso...")
+        # TODO: Próximo paso - Desplegar la lista de tareas 'En progreso' como botones para pasar a 'Listo'
+        bot.send_message(call.message.chat.id, f"⚡ Próximamente verás acá tus tareas en progreso, {persona_remitente}.")
+        
+    elif call.data == "menu_empezar":
+        bot.answer_callback_query(call.id, "Buscando tareas sin empezar...")
+        # TODO: Próximo paso - Desplegar la lista de tareas 'Sin empezar' como botones para ver Drive/Ficha técnica
+        bot.send_message(call.message.chat.id, f"🎬 Próximamente verás acá tus tareas sin empezar, {persona_remitente}.")
 
 # --- RECEPTOR DE NOTAS DE VOZ ---
 @bot.message_handler(content_types=['voice'])
