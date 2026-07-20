@@ -412,10 +412,10 @@ def manejar_seleccion_tarea(call):
         bot.answer_callback_query(call.id, "No estás registrado.")
         return
 
-    # Detectamos el tipo de acción
+    # Detectamos el tipo de acción e identificador truncado
     id_truncado = call.data.replace("fin_", "").replace("emp_", "").replace("act_", "")
     
-    url = f"https://api.notion.com/v1/databases/{NOTION_DATABASE_ID}/query"
+    url_base = f"https://api.notion.com/v1/databases/{NOTION_DATABASE_ID}/query"
     headers = {
         "Authorization": f"Bearer {NOTION_API_KEY}",
         "Content-Type": "application/json",
@@ -426,7 +426,7 @@ def manejar_seleccion_tarea(call):
         # 1. CASO: ACTIVACIÓN REAL (Pasar a En progreso desde el botón interno)
         if call.data.startswith("act_"):
             bot.answer_callback_query(call.id, "Iniciando tarea en Notion...")
-            response = requests.post(url, headers=headers)
+            response = requests.post(url_base, headers=headers)
             resultados = response.json().get("results", [])
             pagina_encontrada = next((p for p in resultados if p.get("id", "").startswith(id_truncado)), None)
             
@@ -440,11 +440,13 @@ def manejar_seleccion_tarea(call):
                     notificar_cambio_a_emiliano(persona_remitente, titulo_tarea, "En progreso")
                 else:
                     bot.send_message(call.message.chat.id, "❌ No se pudo cambiar el estado en Notion.")
+            else:
+                bot.send_message(call.message.chat.id, "❌ No se localizó la tarea para iniciar.")
             return
 
         # 2. CASOS: LEER FICHA O FINALIZAR TAREA
         bot.answer_callback_query(call.id, "Buscando datos en Notion...")
-        response = requests.post(url, headers=headers)
+        response = requests.post(url_base, headers=headers)
         if response.status_code != 200:
             bot.send_message(call.message.chat.id, "❌ Error al conectar con Notion.")
             return
