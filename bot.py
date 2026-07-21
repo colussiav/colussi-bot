@@ -279,7 +279,7 @@ def transcribir_audio_con_gemini(audio_bytes):
         print(f"Error STT: {e}")
     return None
 
-# --- EVALUADOR DE COMANDOS DIRECTOS DE NOTION ---
+# --- EVALUADOR DE COMANDOS DIRECTOS DE NOTION (FLEXIBILIZADO) ---
 def ejecutar_comando_notion(texto, persona_remitente, message):
     texto_lower = texto.lower().strip()
     
@@ -298,7 +298,7 @@ def ejecutar_comando_notion(texto, persona_remitente, message):
         return True
 
     # 2. REPORTE GENERAL EN UN SOLO CHAT (Admins)
-    if any(x in texto_lower for x in ["reporte", "reporte general", "como venimos", "todas las tareas", "tareas tiene el equipo"]):
+    if any(x in texto_lower for x in ["reporte general", "como venimos equipo", "todas las tareas equipo", "tareas tiene el equipo"]):
         if persona_remitente not in ["Emi", "Delfi"]:
             bot.reply_to(message, "Acceso denegado. No posees permisos de administración.")
             return True
@@ -315,8 +315,12 @@ def ejecutar_comando_notion(texto, persona_remitente, message):
         bot.send_message(message.chat.id, mensaje, parse_mode="Markdown")
         return True
 
-    # 3. MIS TAREAS INDIVIDUALES CON MENÚ DE BOTONES INTERACTIVOS (Uno arriba del otro)
-    if any(x in texto_lower for x in ["mis tareas", "que tengo que hacer", "que tareas tengo"]):
+    # 3. MIS TAREAS INDIVIDUALES (Detección ultra-flexible por palabras clave)
+    # Detecta frases como "que tareas tengo colu", "mis tareas pendientes", "que tengo sin hacer", etc.
+    palabras_tarea = ["tarea", "tareas", "pendiente", "pendientes", "hacer", "tengo que"]
+    es_consulta_personal = ("que" in texto_lower or "mis" in texto_lower or "cuales" in texto_lower or "tengo" in texto_lower) and any(p in texto_lower for p in palabras_tarea)
+    
+    if es_consulta_personal:
         pendientes = obtener_pendientes_notion()
         bloques = pendientes.get(persona_remitente)
         
@@ -328,7 +332,6 @@ def ejecutar_comando_notion(texto, persona_remitente, message):
         if bloques["en_progreso"]: mensaje += "⏳ *EN PROGRESO:*\n" + "\n".join([f"  🔹 {t}" for t in bloques["en_progreso"]]) + "\n\n"
         if bloques["sin_empezar"]: mensaje += "💤 *SIN EMPEZAR:*\n" + "\n".join([f"  🔹 {t}" for t in bloques["sin_empezar"]]) + "\n\n"
         
-        # Menú con los botones apilados verticalmente (row_width=1)
         markup = telebot.types.InlineKeyboardMarkup(row_width=1)
         markup.add(
             telebot.types.InlineKeyboardButton("✅ Finalizar tarea", callback_data="menu_finalizar"),
@@ -412,7 +415,6 @@ def manejar_seleccion_tarea(call):
         bot.answer_callback_query(call.id, "No estás registrado.")
         return
 
-    # Detectamos el tipo de acción e identificador truncado
     id_truncado = call.data.replace("fin_", "").replace("emp_", "").replace("act_", "")
     
     url_base = f"https://api.notion.com/v1/databases/{NOTION_DATABASE_ID}/query"
@@ -423,7 +425,6 @@ def manejar_seleccion_tarea(call):
     }
     
     try:
-        # 1. CASO: ACTIVACIÓN REAL (Pasar a En progreso desde el botón interno)
         if call.data.startswith("act_"):
             bot.answer_callback_query(call.id, "Iniciando tarea en Notion...")
             response = requests.post(url_base, headers=headers)
@@ -436,7 +437,7 @@ def manejar_seleccion_tarea(call):
                 titulo_tarea = titulo_data[0].get("text", {}).get("content", "Tarea sin nombre") if titulo_data else "Tarea sin nombre"
                 
                 if aplicar_estado_por_id(page_id_real, "En progreso"):
-                    bot.send_message(call.message.chat.id, f"🚀 ¡Tarea *'{titulo_tarea}'* pasada a *En progreso*! A darle átomos. 🎬")
+                    bot.send_message(call.message.chat.id, f"🚀 ¡Tarea *'{titulo_tarea}'* pasada a *En progreso*! A darle átomos. 🎬", parse_mode="Markdown")
                     notificar_cambio_a_emiliano(persona_remitente, titulo_tarea, "En progreso")
                 else:
                     bot.send_message(call.message.chat.id, "❌ No se pudo cambiar el estado en Notion.")
@@ -444,7 +445,6 @@ def manejar_seleccion_tarea(call):
                 bot.send_message(call.message.chat.id, "❌ No se localizó la tarea para iniciar.")
             return
 
-        # 2. CASOS: LEER FICHA O FINALIZAR TAREA
         bot.answer_callback_query(call.id, "Buscando datos en Notion...")
         response = requests.post(url_base, headers=headers)
         if response.status_code != 200:
@@ -464,7 +464,6 @@ def manejar_seleccion_tarea(call):
         titulo_tarea = titulo_data[0].get("text", {}).get("content", "Tarea sin nombre") if titulo_data else "Tarea sin nombre"
 
         if call.data.startswith("fin_"):
-            # FLUJO: Pasar a "Listo"
             if aplicar_estado_por_id(page_id_real, "Listo"):
                 bot.send_message(call.message.chat.id, f"🎉 ¡Excelente! La tarea *'{titulo_tarea}'* ha sido marcada como *Listo* en Notion.", parse_mode="Markdown")
                 notificar_cambio_a_emiliano(persona_remitente, titulo_tarea, "Listo")
@@ -472,7 +471,6 @@ def manejar_seleccion_tarea(call):
                 bot.send_message(call.message.chat.id, "❌ No se pudo cambiar el estado a Listo.")
         
         elif call.data.startswith("emp_"):
-            # FLUJO: Solo leer información (Vista previa) sin cambiar estado
             archivos_data = propiedades.get("Adjuntar archivo", {}).get("files", [])
             link_drive = None
             if archivos_data:
@@ -488,7 +486,6 @@ def manejar_seleccion_tarea(call):
             if not descripcion and not link_drive:
                 mensaje_detalle += f"\nℹ️ _Esta tarea no incluye descripción adicional ni archivos adjuntos._\n"
 
-            # Creamos el botón final de confirmación para pasar a "En progreso"
             markup_arrancar = telebot.types.InlineKeyboardMarkup(row_width=1)
             markup_arrancar.add(telebot.types.InlineKeyboardButton("🚀 Empezar esta tarea", callback_data=f"act_{id_truncado}"))
 
@@ -498,7 +495,7 @@ def manejar_seleccion_tarea(call):
         print(f"Error en la selección de tarea: {e}")
         bot.send_message(call.message.chat.id, "❌ Ocurrió un error al procesar la solicitud.")
 
-# --- RECEPTOR DE NOTAS DE VOZ ---
+# --- RECEPTOR DE NOTAS DE VOZ (INTEGRADO TOTALMENTE CON COMANDOS) ---
 @bot.message_handler(content_types=['voice'])
 def handle_voice_message(message):
     usuario_id = message.from_user.id
@@ -513,9 +510,13 @@ def handle_voice_message(message):
         texto_transcrito = transcribir_audio_con_gemini(downloaded)
         if not texto_transcrito: return
         
-        print(f"Audio transcrito: '{texto_transcrito}'")
-        if ejecutar_comando_notion(texto_transcrito, persona_remitente, message): return
+        print(f"Audio transcrito de {persona_remitente}: '{texto_transcrito}'")
         
+        # 1. Intentamos evaluar si el audio era una instrucción directa de Notion (consultar tareas, crear, etc.)
+        if ejecutar_comando_notion(texto_transcrito, persona_remitente, message): 
+            return
+        
+        # 2. Si no fue un comando directo de Notion, recién ahí pasa a Gemini para responder charla normal
         respuesta_ai = consultar_gemini(texto_transcrito, persona_remitente)
         if "NOTION|" in respuesta_ai:
             if not respuesta_ai.startswith("NOTION|"):
@@ -594,8 +595,9 @@ def procesar_cambio_estado(texto, persona_remitente, message):
 # --- SERVIDOR WEB CON WEBHOOK PARA REPORTES ---
 class WebhookHandler(BaseHTTPRequestHandler):
     def do_GET(self):
-        if self.path in ["/", ""]:
+        if self.path in ["/", "", "/index.html"]:
             self.send_response(200)
+            self.send_header("Content-Type", "text/plain")
             self.end_headers()
             self.wfile.write(b"COLU Engine Online.")
         elif self.path == "/morning-report":
@@ -603,15 +605,20 @@ class WebhookHandler(BaseHTTPRequestHandler):
             exito = enviar_reporte_matutino_automatico()
             if exito:
                 self.send_response(200)
+                self.send_header("Content-Type", "text/plain")
                 self.end_headers()
                 self.wfile.write(b"Reporte matutino enviado correctamente.")
             else:
                 self.send_response(500)
+                self.send_header("Content-Type", "text/plain")
                 self.end_headers()
                 self.wfile.write(b"Error al procesar el reporte.")
         else:
             self.send_response(404)
             self.end_headers()
+
+    def log_message(self, format, *args):
+        return
 
 def run_server():
     port = int(os.environ.get("PORT", 10000))
