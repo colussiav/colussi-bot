@@ -125,6 +125,46 @@ def obtener_pendientes_notion():
         print(f"Error Notion Query: {e}")
         return {}
 
+# --- NOTION: OBTENER REALIZADAS / FINALIZADAS ---
+def obtener_realizadas_notion(persona_filtro=None):
+    url = f"https://api.notion.com/v1/databases/{NOTION_DATABASE_ID}/query"
+    headers = {
+        "Authorization": f"Bearer {NOTION_API_KEY}",
+        "Content-Type": "application/json",
+        "Notion-Version": "2022-06-28"
+    }
+    
+    filter_data = {
+        "filter": {
+            "property": "Estado",
+            "status": {"equals": "Listo"}
+        }
+    }
+    
+    try:
+        response = requests.post(url, json=filter_data, headers=headers)
+        if response.status_code != 200: return {}
+        resultados = response.json().get("results", [])
+        realizadas_por_persona = {}
+        
+        for pagina in resultados:
+            propiedades = pagina.get("properties", {})
+            titulo_data = propiedades.get("Nombre de la tarea", {}).get("title", [])
+            nombre_tarea = titulo_data[0].get("text", {}).get("content", "Tarea sin nombre") if titulo_data else "Tarea sin nombre"
+            persona = propiedades.get("Asignado", {}).get("select", {}).get("name") or "Sin Asignar"
+            
+            if persona_filtro and persona != persona_filtro:
+                continue
+                
+            if persona not in realizadas_por_persona:
+                realizadas_por_persona[persona] = []
+            realizadas_por_persona[persona].append(nombre_tarea)
+            
+        return realizadas_por_persona
+    except Exception as e:
+        print(f"Error Query Realizadas: {e}")
+        return {}
+
 # --- NOTION: ENVIAR REPORTE MATUTINO AUTOMÁTICO (SOLO ADMIN) ---
 def enviar_reporte_matutino_automatico():
     pendientes = obtener_pendientes_notion()
@@ -279,7 +319,7 @@ def transcribir_audio_con_gemini(audio_bytes):
         print(f"Error STT: {e}")
     return None
 
-# --- EVALUADOR DE COMANDOS DIRECTOS DE NOTION (FLEXIBILIZADO) ---
+# --- EVALUADOR DE COMANDOS DIRECTOS DE NOTION (FLEXIBILIZADO Y CON REALIZADAS) ---
 def ejecutar_comando_notion(texto, persona_remitente, message):
     texto_lower = texto.lower().strip()
     
@@ -297,7 +337,30 @@ def ejecutar_comando_notion(texto, persona_remitente, message):
             bot.send_message(message.chat.id, "❌ Hubo un error al intentar despachar los reportes.")
         return True
 
-    # 2. REPORTE GENERAL EN UN SOLO CHAT (Admins)
+    # 2. DETECTOR DE TAREAS REALIZADAS / FINALIZADAS / COMPLETADAS
+    palabras_realizadas = ["realizada", "realizadas", "terminada", "terminadas", "completada", "completadas", "finalizada", "finalizadas", "listo", "hecho"]
+    es_consulta_realizadas = any(p in texto_lower for p in palabras_realizadas) and ("que" in texto_lower or "mis" in texto_lower or "cuales" in texto_lower or "ver" in texto_lower or "tarea" in texto_lower or "tareas" in texto_lower)
+    
+    if es_consulta_realizadas:
+        # Si pregunta Emi/Delfi "todas las realizadas", le muestra de todo el equipo. Si no, solo las de quien pregunta.
+        es_general = persona_remitente in ["Emi", "Delfi"] and ("equipo" in texto_lower or "todas" in texto_lower or "general" in texto_lower)
+        persona_filtro = None if es_general else persona_remitente
+        
+        realizadas = obtener_realizadas_notion(persona_filtro)
+        
+        if not realizadas:
+            bot.reply_to(message, "🎉 No encontré tareas con estado 'Listo' registradas en Notion.")
+            return True
+            
+        mensaje = "🎉 *Listado de Tareas Realizadas (Listo):*\n\n"
+        for pers, lista_tareas in realizadas.items():
+            mensaje += f"👤 *{pers}:*\n"
+            mensaje += "\n".join([f"  ✅ {t}" for t in lista_tareas]) + "\n\n"
+            
+        bot.send_message(message.chat.id, mensaje, parse_mode="Markdown")
+        return True
+
+    # 3. REPORTE GENERAL PENDIENTE EN UN SOLO CHAT (Admins)
     if any(x in texto_lower for x in ["reporte general", "como venimos equipo", "todas las tareas equipo", "tareas tiene el equipo"]):
         if persona_remitente not in ["Emi", "Delfi"]:
             bot.reply_to(message, "Acceso denegado. No posees permisos de administración.")
@@ -315,8 +378,7 @@ def ejecutar_comando_notion(texto, persona_remitente, message):
         bot.send_message(message.chat.id, mensaje, parse_mode="Markdown")
         return True
 
-    # 3. MIS TAREAS INDIVIDUALES (Detección ultra-flexible por palabras clave)
-    # Detecta frases como "que tareas tengo colu", "mis tareas pendientes", "que tengo sin hacer", etc.
+    # 4. MIS TAREAS INDIVIDUALES PENDIENTES (Detección ultra-flexible)
     palabras_tarea = ["tarea", "tareas", "pendiente", "pendientes", "hacer", "tengo que"]
     es_consulta_personal = ("que" in texto_lower or "mis" in texto_lower or "cuales" in texto_lower or "tengo" in texto_lower) and any(p in texto_lower for p in palabras_tarea)
     
@@ -495,7 +557,7 @@ def manejar_seleccion_tarea(call):
         print(f"Error en la selección de tarea: {e}")
         bot.send_message(call.message.chat.id, "❌ Ocurrió un error al procesar la solicitud.")
 
-# --- RECEPTOR DE NOTAS DE VOZ (INTEGRADO TOTALMENTE CON COMANDOS) ---
+# --- RECEPTOR DE NOTAS DE VOZ ---
 @bot.message_handler(content_types=['voice'])
 def handle_voice_message(message):
     usuario_id = message.from_user.id
@@ -512,11 +574,9 @@ def handle_voice_message(message):
         
         print(f"Audio transcrito de {persona_remitente}: '{texto_transcrito}'")
         
-        # 1. Intentamos evaluar si el audio era una instrucción directa de Notion (consultar tareas, crear, etc.)
         if ejecutar_comando_notion(texto_transcrito, persona_remitente, message): 
             return
         
-        # 2. Si no fue un comando directo de Notion, recién ahí pasa a Gemini para responder charla normal
         respuesta_ai = consultar_gemini(texto_transcrito, persona_remitente)
         if "NOTION|" in respuesta_ai:
             if not respuesta_ai.startswith("NOTION|"):
