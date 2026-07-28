@@ -342,7 +342,6 @@ def ejecutar_comando_notion(texto, persona_remitente, message):
     es_consulta_realizadas = any(p in texto_lower for p in palabras_realizadas) and ("que" in texto_lower or "mis" in texto_lower or "cuales" in texto_lower or "ver" in texto_lower or "tarea" in texto_lower or "tareas" in texto_lower)
     
     if es_consulta_realizadas:
-        # Si pregunta Emi/Delfi "todas las realizadas", le muestra de todo el equipo. Si no, solo las de quien pregunta.
         es_general = persona_remitente in ["Emi", "Delfi"] and ("equipo" in texto_lower or "todas" in texto_lower or "general" in texto_lower)
         persona_filtro = None if es_general else persona_remitente
         
@@ -652,7 +651,7 @@ def procesar_cambio_estado(texto, persona_remitente, message):
         notificar_cambio_a_emiliano(persona_remitente, titulo_tarea, nuevo_estado)
     return True
 
-# --- SERVIDOR WEB CON WEBHOOK PARA REPORTES ---
+# --- SERVIDOR WEB CON WEBHOOK PARA REPORTES MATUTINOS ---
 class WebhookHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path in ["/", "", "/index.html"]:
@@ -661,18 +660,22 @@ class WebhookHandler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(b"COLU Engine Online.")
         elif self.path == "/morning-report":
-            print("Activando reporte matutino desde el Webhook...")
-            exito = enviar_reporte_matutino_automatico()
-            if exito:
+            print("Activando reporte matutino individual para el equipo y general para el admin...")
+            # 1. Envía el reporte individual personalizado a cada integrante de la productora
+            exito_masivo = forzar_reporte_masivo_equipo()
+            # 2. Te envía el reporte matutino general a vos como administrador
+            exito_admin = enviar_reporte_matutino_automatico()
+            
+            if exito_masivo or exito_admin:
                 self.send_response(200)
                 self.send_header("Content-Type", "text/plain")
                 self.end_headers()
-                self.wfile.write(b"Reporte matutino enviado correctamente.")
+                self.wfile.write(b"Reportes matutinos despachados correctamente.")
             else:
                 self.send_response(500)
                 self.send_header("Content-Type", "text/plain")
                 self.end_headers()
-                self.wfile.write(b"Error al procesar el reporte.")
+                self.wfile.write(b"Error al procesar los reportes.")
         else:
             self.send_response(404)
             self.end_headers()
